@@ -136,19 +136,19 @@ def draw(loss, result, task_name, target, data):
         plt.plot(range(len(loss)), loss, label='Training Loss')
         xlabel = 'Epochs'
         title = f'Training Loss on task {task_name}'
-        save_path = f'./{task_name}/train_loss_{target}.png'
+        save_path = f'{task_name}_train_loss_{target}.png'
 
     elif data == 'valid':
         plt.plot(range(len(loss)), loss, label='Validation Loss')
         xlabel = 'Epochs'
         title = f'Validation Loss on task {task_name}'
-        save_path = f'./{task_name}/val_loss_{target}.png'
+        save_path = f'{task_name}_val_loss_{target}.png'
 
     elif data == 'test':
         plt.plot(range(len(loss)), loss, label='Test Loss')
         xlabel = 'Epochs'
         title = f'Test Loss on task {task_name}'
-        save_path = f'./{task_name}/test_loss_{target}.png'
+        save_path = f'{task_name}_test_loss_{target}.png'
 
     else:
         raise TypeError("Invalid data type")
@@ -162,14 +162,14 @@ def draw(loss, result, task_name, target, data):
     if task == 'regression':
         if task_name in ['qm7', 'qm8', 'qm9']:
             label = 'MAE'
-            save_path = f'./{task_name}/{data}_mae_{target}.png'
+            save_path = f'{task_name}_{data}_mae_{target}.png'
         else:
             label = 'RMSE'
-            save_path = f'./{task_name}/{data}_rmse_{target}.png'
+            save_path = f'{task_name}_{data}_rmse_{target}.png'
 
     elif task == 'classification':
         label = 'ROC_AUC'
-        save_path = f'./{task_name}/{data}_roc_auc_{target}.png'
+        save_path = f'{task_name}_{data}_roc_auc_{target}.png'
 
     plt.figure()
     plt.plot(range(len(result)), result, label=label)
@@ -234,7 +234,7 @@ if __name__ == '__main__':
     weight_decay = args.weight_decay
     num_layers = args.num_layers
 
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
     # datasets = ['BBBP', 'Tox21', 'ClinTox', 'HIV', 'BACE', 'SIDER', 'MUV', 'FreeSolv', 'ESOL', 'Lipo', 'qm7', 'qm8', 'qm9']
 
     # wandb.login()
@@ -421,7 +421,7 @@ if __name__ == '__main__':
 
     # wandb.watch(model)
     for target in target_list:
-        dataset = MolTestDatasetWrapper(batch_size=batch_size, num_workers=4, valid_size=0.1, test_size=0.1, data_path=path, target=target,task=task, splitting='random')
+        dataset = MolTestDatasetWrapper(batch_size=batch_size, num_workers=4, valid_size=0.1, test_size=0.1, data_path=path, target=target,task=task, splitting='scaffold')
         train_loader, valid_loader, test_loader = dataset.get_data_loaders()
 
         print(f'Working on dataset {task_name} with target {target}')
@@ -572,5 +572,5 @@ if __name__ == '__main__':
 
         df = pd.DataFrame(result)
 
-        csv_file = f'./{task_name}/test_results.csv' # results saving path
+        csv_file = f'{task_name}_test_results.csv' # results saving path
         df.to_csv(csv_file, mode='a+', index=False)

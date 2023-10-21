@@ -132,7 +132,7 @@ if __name__ == '__main__':
 
             if avg_val_loss < minloss:
                 minloss = avg_val_loss
-                torch.save(model.state_dict(), 'without_conv_model.pth')
+                torch.save(model.state_dict(), 'model.pth')
             model.train()
     print('min validation loss is: ', minloss)
 
