@@ -189,8 +189,10 @@ if __name__ == '__main__':
                         help='number of workers')
     parser.add_argument('--valid', type=float, default=0.05,
                         help='data size for validation')
-    parser.add_argument('--dataset', type=str, default='bbbp',
+    parser.add_argument('--path', type=str, default='/data1/gx/datasets/',
                         help='dataset path')
+    parser.add_argument('--dataset', type=str, default='bbbp',
+                        help='dataset name')
     parser.add_argument('--node_dim', type=int, default=64,
                         help='hidden dimensions')
     parser.add_argument('--emb_dim', type=int, default=300,
@@ -216,6 +218,7 @@ if __name__ == '__main__':
     num_workers = args.num_workers
     valid_size = args.valid
     dataset = args.dataset
+    dataset_path = args.path
     node_dim = args.node_dim
     emb_dim = args.emb_dim
     num_channels = args.num_channels
@@ -233,13 +236,13 @@ if __name__ == '__main__':
     if dataset == 'bbbp':
         task = 'classification'
         task_name = 'bbbp'
-        path = '../dataset/bbbp/BBBP.csv'
+        path = dataset_path + 'bbbp/BBBP.csv'
         target_list = ["p_np"]
 
     elif dataset == 'tox21':
         task = 'classification'
         task_name = 'tox21'
-        path = '../dataset/tox21/tox21.csv'
+        path = dataset_path + 'tox21/tox21.csv'
         target_list = [
             "NR-AR", "NR-AR-LBD", "NR-AhR", "NR-Aromatase", "NR-ER", "NR-ER-LBD", 
             "NR-PPAR-gamma", "SR-ARE", "SR-ATAD5", "SR-HSE", "SR-MMP", "SR-p53"
@@ -248,25 +251,25 @@ if __name__ == '__main__':
     elif dataset == 'clintox':
         task = 'classification'
         task_name = 'clintox'
-        path = '../dataset/clintox/clintox.csv'
+        path = dataset_path + 'clintox/clintox.csv'
         target_list = ['CT_TOX', 'FDA_APPROVED']
 
     elif dataset == 'hiv':
         task = 'classification'
         task_name = 'hiv'
-        path = '../dataset/hiv/HIV.csv'
+        path = dataset_path + 'hiv/HIV.csv'
         target_list = ["HIV_active"]
 
     elif dataset == 'bace':
         task = 'classification'
         task_name = 'bace'
-        path = '../dataset/bace/bace.csv'
+        path = dataset_path + 'bace/bace.csv'
         target_list = ["Class"]
 
     elif dataset == 'sider':
         task = 'classification'
         task_name = 'sider'
-        path = '../dataset/sider/sider.csv'
+        path = dataset_path + 'sider/sider.csv'
         target_list = [
             "Hepatobiliary disorders", "Metabolism and nutrition disorders", "Product issues", 
             "Eye disorders", "Investigations", "Musculoskeletal and connective tissue disorders", 
@@ -286,7 +289,7 @@ if __name__ == '__main__':
     elif dataset == 'muv':
         task = 'classification'
         task_name = 'muv'
-        path = '../dataset/muv/muv.csv'
+        path = dataset_path + 'muv/muv.csv'
         target_list = [
             'MUV-692', 'MUV-689', 'MUV-846', 'MUV-859', 'MUV-644', 'MUV-548', 'MUV-852',
             'MUV-600', 'MUV-810', 'MUV-712', 'MUV-737', 'MUV-858', 'MUV-713', 'MUV-733',
@@ -296,31 +299,31 @@ if __name__ == '__main__':
     elif dataset == 'freesolv':
         task = 'regression'
         task_name = 'freesolv'
-        path = '../dataset/freesolv/freesolv.csv'
+        path = dataset_path + 'freesolv/freesolv.csv'
         target_list = ["expt"]
     
     elif dataset == 'esol':
         task = 'regression'
         task_name = 'esol'
-        path = '../dataset/esol/esol.csv'
+        path = dataset_path + 'esol/esol.csv'
         target_list = ["measured log solubility in mols per litre"]
 
     elif dataset == 'lipo':
         task = 'regression'
         task_name = 'lipo'
-        path = '../dataset/lipophilicity/Lipophilicity.csv'
+        path = dataset_path + 'lipophilicity/Lipophilicity.csv'
         target_list = ["exp"]
     
     elif dataset == 'qm7':
         task = 'regression'
         task_name = 'qm7'
-        path = '../dataset/qm7/qm7.csv'
+        path = dataset_path + 'qm7/qm7.csv'
         target_list = ["u0_atom"]
 
     elif dataset == 'qm8':
         task = 'regression'
         task_name = 'qm8'
-        path = '../dataset/qm8/qm8.csv'
+        path = dataset_path + 'qm8/qm8.csv'
         target_list = [
             "E1-CC2", "E2-CC2", "f1-CC2", "f2-CC2", "E1-PBE0", "E2-PBE0", 
             "f1-PBE0", "f2-PBE0", "E1-CAM", "E2-CAM", "f1-CAM","f2-CAM"
@@ -329,7 +332,7 @@ if __name__ == '__main__':
     elif dataset == 'qm9':
         task = 'regression'
         task_name = 'qm9'
-        path = '../dataset/qm9/qm9.csv'
+        path = dataset_path + 'qm9/qm9.csv'
         target_list = ['mu', 'alpha', 'homo', 'lumo', 'gap', 'r2', 'zpve', 'cv']
 
     else:
