@@ -190,7 +190,6 @@ class MolTestDataset(Dataset):
         x = torch.tensor(x, dtype=torch.float)
         data['atom'].x = xx # nx9
 
-        # 边处理
         bond_types = {
             'SINGLE': {'row': [], 'col': [], 'features': []},
             'DOUBLE': {'row': [], 'col': [], 'features': []},
