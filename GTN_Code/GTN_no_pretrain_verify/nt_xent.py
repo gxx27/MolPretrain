@@ -3,7 +3,7 @@ import numpy as np
 
 
 class NTXentLoss(torch.nn.Module):
-    """对比学习loss"""
+    """contrastive learning loss"""
     def __init__(self, device, batch_size, temperature, use_cosine_similarity):
         super(NTXentLoss, self).__init__()
         self.batch_size = batch_size

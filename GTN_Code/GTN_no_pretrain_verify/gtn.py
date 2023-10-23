@@ -16,7 +16,6 @@ num_bond_direction = 3
 
 class GTN(nn.Module):   
     def __init__(self, task ,num_channels, w_in, w_out, num_layers, emb_dim, args=None):
-        """Graph Transformer的相关内容 我是根据这个链接：https://github.com/seongjunyun/Graph_Transformer_Networks的源码进行修改"""
         super(GTN, self).__init__()
         self.num_channels = num_channels
         self.w_in = w_in
@@ -122,7 +121,7 @@ class GTN(nn.Module):
             if i == 0:
                 H, W = self.layers[i](A, num_nodes, eval=eval)
             else:                
-                H, W = self.layers[i](A, num_nodes, H, eval=eval) # 利用第一层获得的H矩阵做运算
+                H, W = self.layers[i](A, num_nodes, H, eval=eval)
             H = self.normalization(H, num_nodes)
             Ws.append(W)
 
@@ -171,7 +170,7 @@ class GTLayer(nn.Module):
         if self.first == True:
             result_A = self.conv1(A, num_nodes, eval=eval)
             result_B = self.conv2(A, num_nodes, eval=eval)
-            W = [(F.softmax(self.conv1.weight, dim=1)),(F.softmax(self.conv2.weight, dim=1))] # W矩阵存储两个卷积层在第1维上经过softmax过后的权重参数 2x2x5
+            W = [(F.softmax(self.conv1.weight, dim=1)),(F.softmax(self.conv2.weight, dim=1))]
         else:
             result_A = H_
             result_B = self.conv1(A, num_nodes, eval=eval)

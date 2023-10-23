@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -69,16 +68,126 @@ class Model(nn.Module):
         return self.pred_head(gnn_output)
 
 
-def init_seed(seed=2020):
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+def eval(model, dataloader, loss_func, task, normalizer=None):
+    predictions = []
+    labels = []
+    with torch.no_grad():
+        model.eval()
+        eval_loss = 0.0
+        num_data = 0
+
+        for bn, data in enumerate(dataloader):
+            data = data.to(device)
+            pred = model(data)
+
+            if task == 'classification':
+                loss = loss_func(pred, data['atom'].y.flatten())
+            elif task == 'regression':
+                if normalizer:
+                    loss = loss_func(pred, normalizer.norm(data['atom'].y))
+                else:
+                    loss = loss_func(pred, data['atom'].y)
+
+            eval_loss += loss.item() * data['atom'].y.size(0)
+            num_data += data['atom'].y.size(0)
+
+            if normalizer:
+                pred = normalizer.denorm(pred)
+
+            if task == 'classification':
+                pred = F.softmax(pred, dim=-1)
+            predictions.extend(pred.cpu().detach().numpy())
+            labels.extend(data['atom'].y.cpu().flatten().numpy())
+
+        eval_loss /= num_data
+
+    if task == 'regression':
+        predictions = np.array(predictions)
+        labels = np.array(labels)
+        if task_name in ['qm7', 'qm8', 'qm9']:
+            mae = mean_absolute_error(labels, predictions)
+            result = mae
+
+        else:
+            rmse = mean_squared_error(labels, predictions, squared=False)
+            result = rmse            
+
+    elif task == 'classification':
+        predictions = np.array(predictions)
+        labels = np.array(labels)
+        roc_auc = roc_auc_score(labels, predictions[:,1])
+        result = roc_auc
+
+    model.train()
+    return eval_loss, result
+
+def result_tracker(task, result, best_result):
+    if task == 'regression':
+        if result < best_result:
+            return True
+    
+    elif task == 'classification':
+        if result > best_result:
+            return True
+
+def draw(loss, result, task_name, target, data):
+    plt.figure()
+
+    if data == 'train':
+        plt.plot(range(len(loss)), loss, label='Training Loss')
+        xlabel = 'Epochs'
+        title = f'Training Loss on task {task_name}'
+        save_path = f'{task_name}_train_loss_{target}.png'
+
+    elif data == 'valid':
+        plt.plot(range(len(loss)), loss, label='Validation Loss')
+        xlabel = 'Epochs'
+        title = f'Validation Loss on task {task_name}'
+        save_path = f'{task_name}_val_loss_{target}.png'
+
+    elif data == 'test':
+        plt.plot(range(len(loss)), loss, label='Test Loss')
+        xlabel = 'Epochs'
+        title = f'Test Loss on task {task_name}'
+        save_path = f'{task_name}_test_loss_{target}.png'
+
+    else:
+        raise TypeError("Invalid data type")
+
+    plt.xlabel(xlabel)
+    plt.ylabel('Loss')
+    plt.title(title)
+    plt.legend()
+    plt.savefig(save_path)
+
+    if task == 'regression':
+        if task_name in ['qm7', 'qm8', 'qm9']:
+            label = 'MAE'
+            save_path = f'{task_name}_{data}_mae_{target}.png'
+        else:
+            label = 'RMSE'
+            save_path = f'{task_name}_{data}_rmse_{target}.png'
+
+    elif task == 'classification':
+        label = 'ROC_AUC'
+        save_path = f'{task_name}_{data}_roc_auc_{target}.png'
+
+    plt.figure()
+    plt.plot(range(len(result)), result, label=label)
+    plt.xlabel(xlabel)
+    plt.ylabel(label)
+    plt.title(f'{data} {label} on {task_name} {target}')
+    plt.legend()
+    plt.savefig(save_path)
+
+def process_dataset(file_path):
+    with open(file_path, 'r') as file:
+        first_line = file.readline().strip().split(',')
+        filtered_line = [item.strip() for item in first_line if item.strip() != 'smiles']
+        result = [f'{item}' for item in filtered_line]
+        return result
 
 if __name__ == '__main__':
-    init_seed(777)
     parser = argparse.ArgumentParser()
     parser.add_argument('--epoch', type=int, default=1000,
                         help='Training Epochs')
@@ -86,18 +195,24 @@ if __name__ == '__main__':
                         help='Batch Size')
     parser.add_argument('--num_workers', type=int, default=12,
                         help='number of workers')
-    parser.add_argument('--dataset', type=str, default='BBBP',
+    parser.add_argument('--valid', type=float, default=0.05,
+                        help='data size for validation')
+    parser.add_argument('--path', type=str, default='/data1/gx/datasets/',
                         help='dataset path')
+    parser.add_argument('--dataset', type=str, default='bbbp',
+                        help='dataset name')
+    parser.add_argument('--split', type=str, default='scaffold',
+                        help='the way to split dataset')
     parser.add_argument('--node_dim', type=int, default=64,
                         help='hidden dimensions')
     parser.add_argument('--emb_dim', type=int, default=300,
                         help='embedding dimensions')
     parser.add_argument('--num_channels', type=int, default=2,
                         help='number of channels')
-    parser.add_argument('--lr', type=float, default=1e-3,
+    parser.add_argument('--init_lr', type=float, default=3e-5,
                         help='learning rate')
-    parser.add_argument('--warm_up', type=int, default=20,
-                        help='warm up rate')
+    parser.add_argument('--base_lr', type=float, default=1e-5,
+                        help='learning rate')    
     parser.add_argument('--weight_decay', type=float, default=1e-6,
                         help='l2 reg')
     parser.add_argument('--num_layers', type=int, default=2,
@@ -111,61 +226,59 @@ if __name__ == '__main__':
     epochs = args.epoch
     batch_size = args.batch
     num_workers = args.num_workers
+    valid_size = args.valid
     dataset = args.dataset
+    dataset_path = args.path
+    dataset_split = args.split
     node_dim = args.node_dim
     emb_dim = args.emb_dim
     num_channels = args.num_channels
-    init_lr = args.lr
-    warm_up = args.warm_up
+    init_lr = args.init_lr
+    base_lr = args.base_lr
     weight_decay = args.weight_decay
     num_layers = args.num_layers
 
-    # wandb.login(key='ff36dda227a04150a0cacc715b2460176efe3144')
-    # wandb.init(
-    #     project='GTN Molecule',
-    #     name = 'deepchem_test_30_features_lr_1e-5'
-    # )
+    # wandb.login()
+    # wandb.init()
 
     device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
     # datasets = ['BBBP', 'Tox21', 'ClinTox', 'HIV', 'BACE', 'SIDER', 'MUV', 'FreeSolv', 'ESOL', 'Lipo', 'qm7', 'qm8', 'qm9']
 
-    if dataset == 'BBBP':
+    if dataset == 'bbbp':
         task = 'classification'
-        task_name = 'BBBP'
-        path = '/data1/gx/GTN_Code/dataset/BBBP.csv'
-        target_list = ["p_np"]
+        task_name = 'bbbp'
+        path = dataset_path + 'bbbp/bbbp.csv'
+        target_list = process_dataset(path)
 
-    elif dataset == 'Tox21':
+    elif dataset == 'tox21':
         task = 'classification'
-        task_name = 'Tox21'
-        path = '../dataset/tox21.csv'
-        target_list = [
-            "NR-AR", "NR-AR-LBD", "NR-AhR", "NR-Aromatase", "NR-ER", "NR-ER-LBD", 
-            "NR-PPAR-gamma", "SR-ARE", "SR-ATAD5", "SR-HSE", "SR-MMP", "SR-p53"
-        ]
+        task_name = 'tox21'
+        path = dataset_path + 'tox21/tox21.csv'
+        target_list = process_dataset(path)
 
-    elif dataset == 'ClinTox':
+    elif dataset == 'clintox':
         task = 'classification'
-        task_name = 'ClinTox'
-        path = '../dataset/clintox.csv'
-        target_list = ['CT_TOX', 'FDA_APPROVED']
+        task_name = 'clintox'
+        path = dataset_path + 'clintox/clintox.csv'
+        target_list = process_dataset(path)
 
-    elif dataset == 'HIV':
+    elif dataset == 'hiv':
         task = 'classification'
-        task_name = 'HIV'
-        path = '../dataset/HIV.csv'
-        target_list = ["HIV_active"]
+        task_name = 'hiv'
+        path = dataset_path + 'hiv/hiv.csv'
+        target_list = process_dataset(path)
 
-    elif dataset == 'BACE':
+    elif dataset == 'bace':
         task = 'classification'
-        task_name = 'BACE'
-        path = '../dataset/bace.csv'
-        target_list = ["Class"]
+        task_name = 'bace'
+        path = dataset_path + 'bace/bace.csv'
+        target_list = process_dataset(path)
 
-    elif dataset == 'SIDER':
+    elif dataset == 'sider':
         task = 'classification'
-        task_name = 'SIDER'
-        path = '../dataset/sider.csv'
+        task_name = 'sider'
+        path = dataset_path + 'sider/sider.csv'
+        # target_list = process_dataset(path)
         target_list = [
             "Hepatobiliary disorders", "Metabolism and nutrition disorders", "Product issues", 
             "Eye disorders", "Investigations", "Musculoskeletal and connective tissue disorders", 
@@ -181,55 +294,60 @@ if __name__ == '__main__':
             "Ear and labyrinth disorders", "Cardiac disorders", 
             "Nervous system disorders", "Injury, poisoning and procedural complications"
         ]
-
-    elif dataset == 'MUV':
+    
+    elif dataset == 'muv':
         task = 'classification'
-        task_name = 'MUV'
-        path = '../dataset/muv.csv'
-        target_list = [
-            'MUV-692', 'MUV-689', 'MUV-846', 'MUV-859', 'MUV-644', 'MUV-548', 'MUV-852',
-            'MUV-600', 'MUV-810', 'MUV-712', 'MUV-737', 'MUV-858', 'MUV-713', 'MUV-733',
-            'MUV-652', 'MUV-466', 'MUV-832'
-        ]
+        task_name = 'muv'
+        path = dataset_path + 'muv/muv.csv'
+        target_list = process_dataset(path)
 
-    elif dataset == 'FreeSolv':
+    elif dataset == 'freesolv':
         task = 'regression'
-        task_name = 'FreeSolv'
-        path = '../dataset/freesolv.csv'
-        target_list = ["expt"]
-
-    elif dataset == 'ESOL':
+        task_name = 'freesolv'
+        path = dataset_path + 'freesolv/freesolv.csv'
+        target_list = process_dataset(path)
+    
+    elif dataset == 'esol':
         task = 'regression'
-        task_name = 'ESOL'
-        path = '../dataset/esol.csv'
-        target_list = ["measured log solubility in mols per litre"]
+        task_name = 'esol'
+        path = dataset_path + 'esol/esol.csv'
+        target_list = process_dataset(path)
 
-    elif dataset == 'Lipo':
+    elif dataset == 'estrogen':
         task = 'regression'
-        task_name = 'Lipo'
-        path = '../dataset/Lipophilicity.csv'
-        target_list = ["exp"]
+        task_name = 'estrogen'
+        path = dataset_path + 'estrogen/estrogen.csv'
+        target_list = process_dataset(path)
 
+    elif dataset == 'metstab':
+        task = 'regression'
+        task_name = 'metstab'
+        path = dataset_path + 'metstab/metstab.csv'
+        target_list = process_dataset(path)
+
+    elif dataset == 'lipo':
+        task = 'regression'
+        task_name = 'lipo'
+        path = dataset_path + 'lipo/lipo.csv'
+        target_list = process_dataset(path)
+    
     elif dataset == 'qm7':
         task = 'regression'
         task_name = 'qm7'
-        path = '../dataset/qm7.csv'
-        target_list = ["u0_atom"]
+        path = dataset_path + 'qm7/qm7.csv'
+        target_list = process_dataset(path)
 
     elif dataset == 'qm8':
         task = 'regression'
         task_name = 'qm8'
-        path = '../dataset/qm8.csv'
-        target_list = [
-            "E1-CC2", "E2-CC2", "f1-CC2", "f2-CC2", "E1-PBE0", "E2-PBE0", 
-            "f1-PBE0", "f2-PBE0", "E1-CAM", "E2-CAM", "f1-CAM","f2-CAM"
-        ]
-
+        path = dataset_path + 'qm8/qm8.csv'
+        target_list = process_dataset(path)
+    
     elif dataset == 'qm9':
         task = 'regression'
         task_name = 'qm9'
-        path = '../dataset/qm9.csv'
-        target_list = ['mu', 'alpha', 'homo', 'lumo', 'gap', 'r2', 'zpve', 'cv']
+        path = dataset_path + 'qm9/qm9.csv'
+        target_list = process_dataset(path)
 
     else:
         raise ValueError('Undefined downstream task!')
@@ -245,7 +363,7 @@ if __name__ == '__main__':
     gnn = GTN(
         task = task,
         num_channels = num_channels,
-        w_in = 30,
+        w_in = emb_dim,
         w_out = node_dim,
         num_layers = num_layers,
         emb_dim = emb_dim,
@@ -260,16 +378,12 @@ if __name__ == '__main__':
     for name, param in model.named_parameters():
         print(name, param.requires_grad)
 
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=init_lr,
-        weight_decay=weight_decay
-    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=init_lr)
 
-    scheduler = CosineAnnealingLR(
-            optimizer, T_max=epochs-warm_up, 
-            eta_min=0, last_epoch=-1
-    )
+    # scheduler = CosineAnnealingLR(
+    #         optimizer, T_max=epochs-warm_up, 
+    #         eta_min=0, last_epoch=-1
+    # )
 
     # wandb.watch(model)
     for target in target_list:
@@ -289,22 +403,34 @@ if __name__ == '__main__':
         else:
             normalizer = None
 
+        train_loss = []
+        train_auc = []
+        train_mae = []
+        train_rmse = []
+
         val_loss = []
         val_auc = []
-        val_recall = []
         val_mae = []
         val_rmse = []
-        train_loss = []
-        train_batch_loss = []
-        best_valid_loss = 999.0
-        # 训练
+
+        t_loss = []
+        t_auc = []
+        t_mae = []
+        t_rmse = []
+
+        if task == 'classification':
+            best_result = 0.0
+        elif task == 'regression':
+            best_result = 999.0
+
+        # training
         for epoch in range(epochs):
             total_loss = 0
-            # with torch.autograd.detect_anomaly():
             for bn, data in enumerate(train_loader):
                 optimizer.zero_grad()
 
                 data = data.to(device)
+
                 pred = model(data)
 
                 if task == 'classification':
@@ -314,222 +440,107 @@ if __name__ == '__main__':
                         loss = loss_func(pred, normalizer.norm(data['atom'].y))
                     else:
                         loss = loss_func(pred, data['atom'].y)
-                # wandb.log({'batch_loss':loss.item()})
 
                 loss.backward()
                 optimizer.step()
-
+                # wandb.log({'batch_loss':loss.item()})
+                
                 total_loss += loss.item()
-                train_batch_loss.append(loss.item())
-
+            
             avg_train_loss = total_loss / len(train_loader)
             train_loss.append(avg_train_loss)
+
+            _, train_result = eval(model, train_loader, loss_func, task, normalizer)
+            if task == 'regression':
+                if task_name in ['qm7', 'qm8', 'qm9']:
+                    train_mae.append(train_result)
+                else:
+                    train_rmse.append(train_result)
+            
+            elif task == 'classification':
+                train_auc.append(train_result)
             # wandb.log({'metric':avg_train_loss,'lr':optimizer.param_groups[0]['lr']})
 
             # warm up
-            if epoch >= warm_up:
-                scheduler.step()
+            # if epoch >= warm_up:
+            #     scheduler.step()
 
-            # 验证
-            if (epoch + 1) % 5 == 0:
-                predictions = []
-                labels = []
-                with torch.no_grad():
-                    model.eval()
-                    valid_loss = 0.0
-                    num_data = 0
-
-                    for bn, data in enumerate(valid_loader):
-                        data = data.to(device)
-
-                        pred = model(data) # 这里的值是nan
-
-                        if task == 'classification':
-                            loss = loss_func(pred, data['atom'].y.flatten())
-                        elif task == 'regression':
-                            if normalizer:
-                                loss = loss_func(pred, normalizer.norm(data['atom'].y))
-                            else:
-                                loss = loss_func(pred, data['atom'].y)
-
-                        valid_loss += loss.item() * data['atom'].y.size(0)
-                        num_data += data['atom'].y.size(0)
-
-                        if normalizer:
-                            pred = normalizer.denorm(pred)
-
-                        if task == 'classification':
-                            pred = F.softmax(pred, dim=-1)
-
-                        predictions.extend(pred.cpu().detach().numpy())
-                        labels.extend(data['atom'].y.cpu().flatten().numpy())
-
-                    valid_loss /= num_data
-
-                model.train()
-                if task == 'regression':
-                    predictions = np.array(predictions)
-                    labels = np.array(labels)
-                    if task_name in ['qm7', 'qm8', 'qm9']:
-                        mae = mean_absolute_error(labels, predictions)
-                        print('Validation loss:', valid_loss, 'MAE:', mae)
-
-                        val_loss.append(valid_loss)
-                        val_mae.append(mae)
-                    else:
-                        try:
-                            rmse = mean_squared_error(labels, predictions, squared=False)
-                        except Exception:
-                            import ipdb
-                            ipdb.set_trace()
-                        print('Validation loss:', valid_loss, 'RMSE:', rmse)
-
-                        val_loss.append(valid_loss)
-                        val_rmse.append(rmse)
-
-                elif task == 'classification':
-                    predictions = np.array(predictions)
-                    labels = np.array(labels)
-                    try:
-                        roc_auc = roc_auc_score(labels, predictions[:,1])
-                        # recall = recall_score(labels, predictions[:,1])
-                    except ValueError as e:
-                        if "Only one class present in y_true" in str(e):
-                            continue
-                        else:
-                            print('ROC AUC computing error!')
-                            import ipdb
-                            ipdb.set_trace()
-                    print('Validation loss:', valid_loss, 'ROC AUC:', roc_auc)
-
+            # validation & test
+            valid_loss, valid_result = eval(model, valid_loader, loss_func, task, normalizer)
+            if task == 'regression':
+                if task_name in ['qm7', 'qm8', 'qm9']:
+                    print('Validation loss:', valid_loss, 'MAE:', valid_result)
                     val_loss.append(valid_loss)
-                    val_auc.append(roc_auc)
-                    # val_recall.append(recall)
-
-                if valid_loss < best_valid_loss:
-                    best_valid_loss = valid_loss
-                    torch.save(model.state_dict(), f'./{task_name}/model_params.pth')
-
-            if (epoch+1) % 100 == 0: # save checkpoint
-                torch.save(model.state_dict(), f'./{task_name}/model_{epoch+1}.pth')
+                    val_mae.append(valid_result)
+                else:
+                    print('Validation loss:', valid_loss, 'RMSE:', valid_result)
+                    val_loss.append(valid_loss)
+                    val_rmse.append(valid_result) 
             
-        plt.figure()
-        plt.plot(range(len(train_loss)), train_loss, label='Training Loss')
-        plt.xlabel('Epochs')
-        plt.ylabel('Loss')
-        plt.title(f'Training Loss on task {task_name}')
-        plt.legend()
-        plt.savefig(f'./{task_name}/train_loss_avg_{target}.png')
+            elif task == 'classification':
+                print('Validation loss:', valid_loss, 'ROC AUC:', valid_result)
+                val_loss.append(valid_loss)
+                val_auc.append(valid_result)
 
-        plt.figure()
-        plt.plot(range(len(val_loss)), val_loss, label='Validation Loss')
-        plt.xlabel('Epochs')
-        plt.ylabel('Loss')
-        plt.title(f'Validation Loss on task {task_name}')
-        plt.legend()
-        plt.savefig(f'./{task_name}/val_loss_{target}.png')      
+            # test
+            test_loss, test_result = eval(model, test_loader, loss_func, task, normalizer)
+            if task == 'regression':
+                if task_name in ['qm7', 'qm8', 'qm9']:
+                    print('Test loss:', test_loss, 'MAE:', test_result)
+                    t_loss.append(test_loss)
+                    t_mae.append(test_result)
 
-        plt.figure()
-        plt.plot(range(len(train_batch_loss)), train_batch_loss, label='Batch Loss')
-        plt.xlabel('Epochs')
-        plt.ylabel('Loss')
-        plt.title(f'Batch Loss on task {task_name}')
-        plt.legend()
-        plt.savefig(f'./{task_name}/train_batch_loss_{target}.png')
+                else:
+                    print('Test loss:', test_loss, 'RMSE:', test_result)
+                    t_loss.append(test_loss)
+                    t_rmse.append(test_result)
+
+            
+            elif task == 'classification':
+                print('Test loss:', test_loss, 'ROC AUC:', test_result)
+                t_loss.append(test_loss)
+                t_auc.append(test_result)
+
+            # track
+            if result_tracker(task, valid_result, best_result): # early stopping
+                best_result = valid_result
+                best_train_result = train_result
+                best_valid_result = valid_result
+                best_test_result = test_result
+                best_epoch = epoch
+            
+            if epoch - best_epoch >= 20:
+                print('Train: %.2f, Valid: %.2f, Test: %.2f' % (best_train_result, best_valid_result, best_test_result))
+                break
 
         if task == 'regression':
             if task_name in ['qm7', 'qm8', 'qm9']:
-                plt.figure()
-                plt.plot(range(len(val_mae)), val_mae, label='MAE')
-                plt.xlabel('Epochs')
-                plt.ylabel('MAE')
-                plt.title(f'MAE on target {target}')
-                plt.legend()
-                plt.savefig(f'./{task_name}/val_mae_{target}.png')
-            
+                draw(train_loss, train_mae, task_name, target, data='train')
+                draw(val_loss, val_mae, task_name, target, data='valid')
+                draw(t_loss, t_mae, task_name, target, data='test')
             else:
-                plt.figure()
-                plt.plot(range(len(val_rmse)), val_rmse, label='RMSE')
-                plt.xlabel('Epochs')
-                plt.ylabel('RMSE')
-                plt.title(f'RMSE with target {target}')
-                plt.legend()
-                plt.savefig(f'./{task_name}/val_rmse_{target}.png')
-
+                draw(train_loss, train_rmse, task_name, target, data='train')
+                draw(val_loss, val_rmse, task_name, target, data='valid')
+                draw(t_loss, t_rmse, task_name, target, data='test')
+        
         elif task == 'classification':
-            plt.figure()
-            plt.plot(range(len(val_auc)), val_auc, label='ROC_AUC')
-            plt.xlabel('Epochs')
-            plt.ylabel('AUC')
-            plt.title(f'ROC_AUC with target {target}')
-            plt.legend()
-            plt.savefig(f'./{task_name}/val_roc_auc_{target}.png')
-
-        # 测试
-        model.load_state_dict(torch.load(f'./{task_name}/model_params.pth'))
-        predictions = []
-        labels = []
-        with torch.no_grad():
-            model.eval()
-
-            test_loss = 0.0
-            num_data = 0
-            for bn, data in enumerate(test_loader):
-                data = data.to(device)
-
-                pred = model(data)
-
-                if task == 'classification':
-                    loss = loss_func(pred, data['atom'].y.flatten())
-                elif task == 'regression':
-                    if normalizer:
-                        loss = loss_func(pred, normalizer.norm(data['atom'].y))
-                    else:
-                        loss = loss_func(pred, data['atom'].y)
-
-                test_loss += loss.item() * data['atom'].y.size(0)
-                num_data += data['atom'].y.size(0)
-
-                if normalizer:
-                    pred = normalizer.denorm(pred)
-
-                if task == 'classification':
-                    pred = F.softmax(pred, dim=-1)
-                predictions.extend(pred.cpu().detach().numpy())
-                labels.extend(data['atom'].y.cpu().flatten().numpy())
-
-            test_loss /= num_data
+            draw(train_loss, train_auc, task_name, target, data='train')
+            draw(val_loss, val_auc, task_name, target, data='valid')
+            draw(t_loss, t_auc, task_name, target, data='test')
+        else:
+            raise TypeError
         
-        model.train()
-
-        if task == 'regression':
-            predictions = np.array(predictions)
-            labels = np.array(labels)
-            if task_name in ['qm7', 'qm8', 'qm9']:
-                mae = mean_absolute_error(labels, predictions)
-                print(f'Test loss on task {task_name}:', test_loss, 'Test MAE:', mae)
-            else:
-                rmse = mean_squared_error(labels, predictions, squared=False)
-                print(f'Test loss on task {task_name}:', test_loss, 'Test RMSE:', rmse)
-
-        elif task == 'classification': 
-            predictions = np.array(predictions)
-            labels = np.array(labels)
-            roc_auc = roc_auc_score(labels, predictions[:,1])
-            print(f'Test loss on task {task_name}:', test_loss, 'Test ROC AUC:', roc_auc)
-        
-        result = {'task_name': [], 'metric': [], 'epoch':epochs}
+        result = {'task_name': [], 'metric': []}
         result['task_name'].append((task_name, target))
         if task == 'regression':
             if task_name in ['qm7', 'qm8', 'qm9']:
-                result['metric'].append(('MAE', mae))
+                result['metric'].append(('MAE', best_test_result))
             else:
-                result['metric'].append(('RMSE', rmse))
+                result['metric'].append(('RMSE', best_test_result))
         elif task == 'classification':
-            result['metric'].append(('ROC_AUC', roc_auc))
-
+            result['metric'].append(('ROC_AUC', best_test_result))
 
         df = pd.DataFrame(result)
 
-        csv_file = f'./{task_name}/test_results.csv'
+        csv_file = f'{task_name}_test_results.csv' # results saving path
         df.to_csv(csv_file, mode='a+', index=False)

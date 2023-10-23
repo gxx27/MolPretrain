@@ -175,7 +175,7 @@ def draw(loss, result, task_name, target, data):
     plt.plot(range(len(result)), result, label=label)
     plt.xlabel(xlabel)
     plt.ylabel(label)
-    plt.title(f'{label} on target {target}')
+    plt.title(f'{data} {label} on {task_name} {target}')
     plt.legend()
     plt.savefig(save_path)
 

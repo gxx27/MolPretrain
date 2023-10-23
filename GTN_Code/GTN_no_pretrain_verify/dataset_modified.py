@@ -170,19 +170,19 @@ class MolTestDataset(Dataset):
         # xx = features[0].get_atom_features()
         xx = torch.tensor(features[0].node_features, dtype=torch.float)
 
-        # 节点处理
+
         x = []
 
         for atom in mol.GetAtoms():
-            atomic_num = atom.GetAtomicNum() # 节点序号
-            chirality = CHIRALITY_LIST.index(atom.GetChiralTag()) # 手性特征
-            degree = DEGREE_LIST.index(atom.GetDegree()) # 节点度数
-            formal_charge = FORMAL_CHARGE_LIST.index(atom.GetFormalCharge()) #  形式电荷
-            numH = NUMH_LIST.index(atom.GetTotalNumHs()) # 氢原子数目
-            number_radical_e = NUM_RADICAL_E_LIST.index(atom.GetNumRadicalElectrons()) # 自由基电子数目
-            hybridization = HYBRIDIZATION_LIST.index(atom.GetHybridization()) # 杂化状态
-            is_aromatic = IS_AROMATIC_LIST.index(atom.GetIsAromatic()) # 是否芳香烃
-            is_in_ring = IS_IN_RING_LIST.index(atom.IsInRing()) # 是否在环上
+            atomic_num = atom.GetAtomicNum()
+            chirality = CHIRALITY_LIST.index(atom.GetChiralTag())
+            degree = DEGREE_LIST.index(atom.GetDegree())
+            formal_charge = FORMAL_CHARGE_LIST.index(atom.GetFormalCharge())
+            numH = NUMH_LIST.index(atom.GetTotalNumHs())
+            number_radical_e = NUM_RADICAL_E_LIST.index(atom.GetNumRadicalElectrons())
+            hybridization = HYBRIDIZATION_LIST.index(atom.GetHybridization())
+            is_aromatic = IS_AROMATIC_LIST.index(atom.GetIsAromatic())
+            is_in_ring = IS_IN_RING_LIST.index(atom.IsInRing())
             
             atom_features = [atomic_num, chirality, degree, formal_charge, numH, number_radical_e, hybridization, is_aromatic, is_in_ring]
             x.append(atom_features)
@@ -192,10 +192,10 @@ class MolTestDataset(Dataset):
 
         # 边处理
         bond_types = {
-            'SINGLE': {'row': [], 'col': [], 'features': []}, # 单键
-            'DOUBLE': {'row': [], 'col': [], 'features': []}, # 双键
-            'TRIPLE': {'row': [], 'col': [], 'features': []}, # 三键
-            'AROMATIC': {'row': [], 'col': [], 'features': []} # 芳香烃
+            'SINGLE': {'row': [], 'col': [], 'features': []},
+            'DOUBLE': {'row': [], 'col': [], 'features': []},
+            'TRIPLE': {'row': [], 'col': [], 'features': []},
+            'AROMATIC': {'row': [], 'col': [], 'features': []}
         }
 
         def add_bond(bond_type, start, end, features):

@@ -124,7 +124,6 @@ class MolTestDataset(Dataset):
 
         data = HeteroData()
 
-        # 节点处理
         type_idx = []
         chirality_idx = []
         atomic_number = []
@@ -137,20 +136,20 @@ class MolTestDataset(Dataset):
         x2 = torch.tensor(chirality_idx, dtype=torch.long).view(-1,1)
         x = torch.cat([x1, x2], dim=-1)
 
-        data['atom'].x = x # 节点特征
+        data['atom'].x = x
 
-        # 边处理
+
         bond_types = {
-            'SINGLE': {'row': [], 'col': [], 'features': []}, # 单键
-            'DOUBLE': {'row': [], 'col': [], 'features': []}, # 双键
-            'TRIPLE': {'row': [], 'col': [], 'features': []}, # 三键
-            'AROMATIC': {'row': [], 'col': [], 'features': []} # 芳香烃
+            'SINGLE': {'row': [], 'col': [], 'features': []},
+            'DOUBLE': {'row': [], 'col': [], 'features': []},
+            'TRIPLE': {'row': [], 'col': [], 'features': []},
+            'AROMATIC': {'row': [], 'col': [], 'features': []}
         }
 
         def add_bond(bond_type, start, end, features):
-            bond_types[bond_type]['row'] += [start, end] # 存储边信息
+            bond_types[bond_type]['row'] += [start, end]
             bond_types[bond_type]['col'] += [end, start]
-            bond_types[bond_type]['features'].append(features) # 因为是无向图，所以要添加两份
+            bond_types[bond_type]['features'].append(features)
             bond_types[bond_type]['features'].append(features)
 
         for bond in mol.GetBonds():
@@ -237,7 +236,7 @@ class MolTestDatasetWrapper(object):
             valid_idx, test_idx, train_idx = indices[:split], indices[split:split+split2], indices[split+split2:]
         
         elif self.splitting == 'scaffold':
-            train_idx, valid_idx, test_idx = scaffold_split(train_dataset, self.valid_size, self.test_size) # 这里调用scaffold
+            train_idx, valid_idx, test_idx = scaffold_split(train_dataset, self.valid_size, self.test_size)
 
         # define samplers for obtaining training and validation batches
         train_sampler = SubsetRandomSampler(train_idx)
