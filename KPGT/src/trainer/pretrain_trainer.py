@@ -93,6 +93,6 @@ class Trainer():
                 break
 
     def save_model(self, model):
-        torch.save(model.state_dict(), self.args.save_path+f"/{self.args.config}.pth")
+        torch.save(model.state_dict(), self.args.save_path+f"{self.args.config}.pth")
 
     
