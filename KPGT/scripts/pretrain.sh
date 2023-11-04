@@ -1,1 +1,1 @@
-CUDA_VISIBLE_DEVICES=0 python -u -m torch.distributed.run --nproc_per_node=1 --nnodes=1 --master_port 12312 train_kpgt.py --save_path ../models/pretrained/base/ --n_threads 2 --n_devices 1 --config base --n_steps 100000 --data_path ../datasets/
+CUDA_VISIBLE_DEVICES=0 python -u -m torch.distributed.run --nproc_per_node=1 --nnodes=1 --master_port 12312 train_kpgt.py --save_path ../models/pretrained/base/ --n_threads 2 --n_devices 1 --config base --n_steps 100000 --data_path ../datasets/pubchem-10m
