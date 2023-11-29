@@ -3,11 +3,6 @@
 ## Dataset
 Dataset are available at the Google Drive link:https://drive.google.com/drive/folders/1FPmZilTbS5qnR-ehOZxn0aSf6y5gg8Go
 
-## GTN
-Folder GTN_no_pretrain_verify contains the GTN code for supervised learning
-
-Folder training_code contains the GTN code for pre-training and fine-tuning
-
 ## KPGT
 First, you need to download the dataset and pre-trained model in the file KPGT/
 
