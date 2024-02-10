@@ -6,7 +6,14 @@ import torch
 import dgl.backend as F
 class MoleculeDataset(Dataset):
     def __init__(self, root_path):
-        smiles_path = os.path.join(root_path, "pubchem-10m-clean.txt")
+        self.root_path = root_path
+        if 'pubchem' in root_path:
+            smiles_path = os.path.join(root_path, "pubchem-10m-clean.txt")
+        elif 'chembl' in root_path:
+            smiles_path = os.path.join(root_path, "smiles.smi")
+        else:
+            raise ValueError('Unknown Pretraining dataset!')
+
         fp_path = os.path.join(root_path, "rdkfp1-7_512.npz")
         md_path = os.path.join(root_path, "molecular_descriptors.npz")
         with open(smiles_path, 'r') as f:

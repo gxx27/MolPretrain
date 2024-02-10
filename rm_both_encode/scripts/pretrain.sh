@@ -1,2 +1,0 @@
-CUDA_VISIBLE_DEVICES=0,1,2,3 python -u -m torch.distributed.run --nproc_per_node=4 --nnodes=1 --master_port 12312 train_kpgt.py \
---save_path ../models/ --n_threads 8 --n_devices 4 --config base --n_steps 100000 --data_path ../datasets/pubchem-10m

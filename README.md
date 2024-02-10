@@ -29,4 +29,13 @@ cd scripts
 ```
 to do the fine-tuning
 
-You can change the downstream task in the shell files
+You can change the downstream task in the shell files, please choose 5-6 tasks which performs best.
+
+## Files
+KPGT: dynamic masking + md_pred + fp_pred + enlarged dataset
+
+rm_both_pred: dynamic masking + enlarged dataset
+
+rm_fp_pred: dynamic masking + md_pred + enlarged dataset
+
+rm_md_pred: dynamic masking + fp_pred + enlarged dataset

@@ -89,10 +89,7 @@ class TripletTransformer(nn.Module):
         g.srcdata.update({'Q': q})
         g.apply_edges(fn.u_dot_v('Q', 'K', 'node_attn'))
         
-        # ablation study 1 modify here
-        g.edata['a'] = g.edata['node_attn'] + path_attn.reshape(len(g.edata['node_attn']),-1,1) # modify here
-        # g.edata['a'] = g.edata['node_attn'] + dist_attn.reshape(len(g.edata['node_attn']),-1,1)
-        # g.edata['a'] = g.edata['node_attn']
+        g.edata['a'] = g.edata['node_attn'] + dist_attn.reshape(len(g.edata['node_attn']),-1,1) + path_attn.reshape(len(g.edata['node_attn']),-1,1)
         g.edata['sa'] = self.attn_dropout(edge_softmax(g, g.edata['a']))
 
         g.ndata['hv'] = v.view(-1, self.d_feats)
