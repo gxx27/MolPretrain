@@ -24,8 +24,8 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
-    # according to PubChem and ChEMBL dataset, these should be changed to pubchem-10m.txt or smiles.smi
-    with open(f"{args.data_path}/smiles.smi", 'r') as f: 
+    # according to PubChem and ChEMBL and mix dataset, these should be changed to pubchem-10m.txt or smiles.smi or mix.txt
+    with open(f"{args.data_path}/mix.txt", 'r') as f: 
             lines = f.readlines()
             smiless = [line.strip('\n') for line in lines]
 

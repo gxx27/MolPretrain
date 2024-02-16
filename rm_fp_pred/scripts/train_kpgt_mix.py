@@ -28,8 +28,7 @@ local_rank = int(os.environ['LOCAL_RANK'])
 def parse_args():
     parser = argparse.ArgumentParser(description="Arguments for training LiGhT")
     parser.add_argument("--seed", type=int, default=22)
-    parser.add_argument("--pretrain1_path", type=str, default=None)
-    parser.add_argument("--pretrain2_path", type=str, default=None)
+    parser.add_argument("--data_path", type=str, default=None)
     parser.add_argument("--save_path", type=str, default='/data1/gx/KPGT/models/pretrained/base/')
     parser.add_argument("--n_steps", type=int, default=100000)
     parser.add_argument("--config", type=str, default="base")
@@ -61,7 +60,7 @@ if __name__ == '__main__':
     
     vocab = Vocab(N_ATOM_TYPES, N_BOND_TYPES)        
     collator = Collator_pretrain(vocab, max_length=config['path_length'], n_virtual_nodes=4, candi_rate=config['candi_rate'], fp_disturb_rate=config['fp_disturb_rate'], md_disturb_rate=config['md_disturb_rate'], subgraph_disturb_rate=config['subgraph_disturb_rate'])
-    train_dataset = MoleculeDataset(root_path=args.pretrain1_path)
+    train_dataset = MoleculeDataset(root_path=args.data_path)
     train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
 
     model = LiGhT(
@@ -94,16 +93,6 @@ if __name__ == '__main__':
     trainer = Trainer(args, optimizer, lr_scheduler, reg_loss_fn, clf_loss_fn, sl_loss_fn, 
                       reg_evaluator, clf_evaluator, result_tracker, summary_writer, device=device,local_rank=local_rank)
     trainer.fit(model, train_loader, train_episode=1)
-    
-    del train_dataset # reduce memory cost
-    del train_loader
-    
-    train_dataset = MoleculeDataset(root_path=args.pretrain2_path)
-    train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
-
-    clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
-        
-    trainer.fit(model, train_loader, train_episode=2)
 
     if local_rank == 0:
         summary_writer.close()
