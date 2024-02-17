@@ -12,4 +12,5 @@ python -u -m torch.distributed.run --nproc_per_node=$nproc_per_node \
     --config KPGT-B/768 \
     --n_steps 100000 \
     --pretrain1_path ../../dataset/chembl29 \
-    --pretrain2_path ../../dataset/pubchem-10m
+    --pretrain2_path ../../dataset/pubchem-10m \
+    --pretrain_strategy rm_none_pred

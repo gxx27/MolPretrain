@@ -35,6 +35,7 @@ def parse_args():
     parser.add_argument("--config", type=str, default="base")
     parser.add_argument("--n_threads", type=int, default=8)
     parser.add_argument("--n_devices", type=int, default=1)
+    parser.add_argument("--pretrain_strategy", type=str, default=None) # Pretrain strategy: rm_none_pred, rm_fp_pred, rm_md_pred, rm_both_pred
     args = parser.parse_args()
     return args
 def seed_worker(worker_id):
@@ -62,7 +63,8 @@ if __name__ == '__main__':
     vocab = Vocab(N_ATOM_TYPES, N_BOND_TYPES)        
     collator = Collator_pretrain(vocab, max_length=config['path_length'], n_virtual_nodes=4, candi_rate=config['candi_rate'], fp_disturb_rate=config['fp_disturb_rate'], md_disturb_rate=config['md_disturb_rate'], subgraph_disturb_rate=config['subgraph_disturb_rate'])
     train_dataset = MoleculeDataset(root_path=args.pretrain1_path)
-    train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
+    train_loader = DataLoader(train_dataset, batch_size=3, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
+    # train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
 
     model = LiGhT(
         d_node_feats=config['d_node_feats'],
@@ -98,12 +100,13 @@ if __name__ == '__main__':
     del train_dataset # reduce memory cost
     del train_loader
     
-    train_dataset = MoleculeDataset(root_path=args.pretrain2_path)
-    train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
+    if 'mix' not in args.pretrain1_path:
+        train_dataset = MoleculeDataset(root_path=args.pretrain2_path)
+        train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
 
-    clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
-        
-    trainer.fit(model, train_loader, train_episode=2)
+        clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
+            
+        trainer.fit(model, train_loader, train_episode=2)
 
     if local_rank == 0:
         summary_writer.close()

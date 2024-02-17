@@ -52,14 +52,22 @@ class Trainer():
                 md_loss = self.reg_loss_fn(md_predictions, mds).mean()
                 subgraph_loss = self.sl_loss_fn(subgraph_prediction, subgraph_labels).mean()
                 
-                loss = (sl_loss + fp_loss + md_loss + subgraph_loss)/4
+                if self.args.pretrain_strategy == 'rm_fp_pred':
+                    loss = (sl_loss + md_loss + subgraph_loss)/3
+                elif self.args.pretrain_strategy == 'rm_md_pred':
+                    loss = (sl_loss + fp_loss + subgraph_loss)/3
+                elif self.args.pretrain_strategy == 'rm_both_pred':
+                    loss = (sl_loss + subgraph_loss)/2
+                elif self.args.pretrain_strategy == 'rm_none_pred':
+                    loss = (sl_loss + fp_loss + md_loss + subgraph_loss) / 4
+                
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
                 self.optimizer.step()
                 self.n_updates += 1
                 self.training_updates += 1
                 self.lr_scheduler.step()
-                if self.summary_writer is not None:
+                if self.summary_writer is not None and self.local_rank == 0:
                     loss_mask = self.sl_loss_fn(sl_predictions.detach().cpu()[mask_replace_keep==1],sl_labels.detach().cpu()[mask_replace_keep==1]).mean()
                     loss_replace = self.sl_loss_fn(sl_predictions.detach().cpu()[mask_replace_keep==2],sl_labels.detach().cpu()[mask_replace_keep==2]).mean()
                     loss_keep = self.sl_loss_fn(sl_predictions.detach().cpu()[mask_replace_keep==3],sl_labels.detach().cpu()[mask_replace_keep==3]).mean()
@@ -72,8 +80,12 @@ class Trainer():
                     self.summary_writer.add_scalar('Loss/loss_mask', loss_mask.item(), self.n_updates)
                     self.summary_writer.add_scalar('Loss/loss_replace', loss_replace.item(), self.n_updates)
                     self.summary_writer.add_scalar('Loss/loss_keep', loss_keep.item(), self.n_updates)
-                    self.summary_writer.add_scalar('Loss/loss_clf', fp_loss.item(), self.n_updates)
-                    self.summary_writer.add_scalar('Loss/loss_reg', md_loss.item(), self.n_updates)
+                    
+                    if self.args.pretrain_strategy != 'rm_fp_pred':
+                        self.summary_writer.add_scalar('Loss/loss_clf', fp_loss.item(), self.n_updates)
+                    if self.args.pretrain_strategy != 'rm_md_pred':
+                        self.summary_writer.add_scalar('Loss/loss_reg', md_loss.item(), self.n_updates)
+                
                     self.summary_writer.add_scalar('Loss/loss_subgraph', subgraph_loss.item(), self.n_updates)
                     self.summary_writer.add_scalar('LR', torch.tensor(self.lr_scheduler.get_lr()[-1]).item(), self.n_updates)
                     
@@ -112,10 +124,12 @@ class Trainer():
                 raise ValueError('Unknown Pretraining dataset!') # type of dataset could be changed here
             
         if train_episode == 1:
-            print(f'training updates:{self.training_updates}, n_updates:{self.n_updates}')
+            if self.local_rank == 0:
+                print(f'training updates:{self.training_updates}, n_updates:{self.n_updates}')
         elif train_episode == 2:
             self.training_updates = 0
-            print(f'training updates:{self.training_updates}, n_updates:{self.n_updates}')
+            if self.local_rank == 0:
+                print(f'training updates:{self.training_updates}, n_updates:{self.n_updates}')
         
         for epoch in range(1, 1001):
             model.train()

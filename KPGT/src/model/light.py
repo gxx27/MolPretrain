@@ -219,8 +219,6 @@ class TripletEmbedding(nn.Module):
         activation=nn.GELU()):
         super(TripletEmbedding, self).__init__()
         self.in_proj = MLP(d_g_feats*2, d_g_feats, 2, activation)
-        self.disturbed_fp_proj = MLP(d_fp_feats, d_g_feats, 2, activation)
-        self.disturbed_md_proj = MLP(d_md_feats, d_g_feats, 2, activation)
         self.fp_proj = MLP(d_fp_feats, d_g_feats, 2, activation)
         self.md_proj = MLP(d_md_feats, d_g_feats, 2, activation)
     def forward(self, node_h, edge_h, disturbed_fp, disturbed_md, indicators, fp=None, md=None):

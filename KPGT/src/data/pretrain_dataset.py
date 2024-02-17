@@ -11,6 +11,8 @@ class MoleculeDataset(Dataset):
             smiles_path = os.path.join(root_path, "pubchem-10m-clean.txt")
         elif 'chembl' in root_path:
             smiles_path = os.path.join(root_path, "smiles.smi")
+        elif 'mix' in root_path:
+            smiles_path = os.path.join(root_path, "mix.txt")
         else:
             raise ValueError('Unknown Pretraining dataset!')
 

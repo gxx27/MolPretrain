@@ -1,2 +1,0 @@
-python finetune.py --dataset estrogen --dataset_type classification --metric rocauc --cuda cuda:3 \
---batch_size 32 --config KPGT-B/768 --model_path '../models/model_200.pth' --data_path '/data1/gx/datasets'
