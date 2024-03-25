@@ -9,7 +9,6 @@ from torch.optim import Adam
 from torch.nn import MSELoss, BCEWithLogitsLoss, CrossEntropyLoss
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data.distributed import DistributedSampler
-import dgl
 import numpy as np
 import os
 import random
@@ -25,19 +24,26 @@ from src.model_config import config_dict
 import warnings
 warnings.filterwarnings("ignore")
 local_rank = int(os.environ['LOCAL_RANK'])
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Arguments for training LiGhT")
     parser.add_argument("--seed", type=int, default=22)
     parser.add_argument("--pretrain1_path", type=str, default=None)
     parser.add_argument("--pretrain2_path", type=str, default=None)
-    parser.add_argument("--save_path", type=str, default='/data1/gx/KPGT/models/pretrained/base/')
+    parser.add_argument("--save_path", type=str, default='../models')
     parser.add_argument("--n_steps", type=int, default=100000)
-    parser.add_argument("--config", type=str, default="base")
+    parser.add_argument("--config", type=str, default="KPGT-B/768")
     parser.add_argument("--n_threads", type=int, default=8)
     parser.add_argument("--n_devices", type=int, default=1)
     parser.add_argument("--pretrain_strategy", type=str, default=None) # Pretrain strategy: rm_none_pred, rm_fp_pred, rm_md_pred, rm_both_pred
+    parser.add_argument("--data_aug1", type=str, default=None, help='choose from drop_nodes, permute_edges, mask_nodes, subgraph')
+    parser.add_argument("--data_aug1_rate", type=float, default=0.2)
+    parser.add_argument("--data_aug2", type=str, default=None, help='choose from drop_nodes, permute_edges, mask_nodes, subgraph')
+    parser.add_argument("--data_aug2_rate", type=float, default=0.2)
     args = parser.parse_args()
     return args
+
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
@@ -47,23 +53,33 @@ if __name__ == '__main__':
     args = parse_args()
     config = config_dict[args.config]
     print(config)
+    print(args)
     torch.backends.cudnn.benchmark = True
     torch.cuda.set_device(local_rank)
     torch.distributed.init_process_group(backend='nccl')
     device = torch.device('cuda', local_rank)
+    # device = torch.device('cpu')
     set_random_seed(args.seed)
     print(local_rank)
     val_results, test_results, train_results = [], [], []
  
-    if local_rank == 0:
-        summary_writer = SummaryWriter(f"tensorboard/pretrain-mix-{args.config}", )
-    else: 
-        summary_writer = None 
+    # if local_rank == 0:
+    #     summary_writer = SummaryWriter(f"tensorboard/pretrain-mix-{args.config}", )
+    # else: 
+    #     summary_writer = None 
+    summary_writer = None
     
     vocab = Vocab(N_ATOM_TYPES, N_BOND_TYPES)        
-    collator = Collator_pretrain(vocab, max_length=config['path_length'], n_virtual_nodes=4, candi_rate=config['candi_rate'], fp_disturb_rate=config['fp_disturb_rate'], md_disturb_rate=config['md_disturb_rate'], subgraph_disturb_rate=config['subgraph_disturb_rate'])
+    collator = Collator_pretrain(
+        vocab, max_length=config['path_length'], n_virtual_nodes=2, 
+        candi_rate=config['candi_rate'], fp_disturb_rate=config['fp_disturb_rate'], md_disturb_rate=config['md_disturb_rate'], 
+        data_aug1=args.data_aug1, data_aug1_rate=args.data_aug1_rate, data_aug2=args.data_aug2, data_aug2_rate=args.data_aug2_rate
+    )
     train_dataset = MoleculeDataset(root_path=args.pretrain1_path)
-    train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
+    train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), 
+                              batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, 
+                              worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
+    )
 
     model = LiGhT(
         d_node_feats=config['d_node_feats'],
@@ -91,21 +107,23 @@ if __name__ == '__main__':
     reg_evaluator = Evaluator("mix", reg_metric, train_dataset.d_mds)
     clf_evaluator = Evaluator("mix", clf_metric, train_dataset.d_fps)
     result_tracker = Result_Tracker(reg_metric)
-    
+
     trainer = Trainer(args, optimizer, lr_scheduler, reg_loss_fn, clf_loss_fn, sl_loss_fn, 
                       reg_evaluator, clf_evaluator, result_tracker, summary_writer, device=device,local_rank=local_rank)
     trainer.fit(model, train_loader, train_episode=1)
-    
+
     del train_dataset # reduce memory cost
     del train_loader
     
-    if 'mix' not in args.pretrain1_path:
+    if 'mix' not in args.pretrain1_path and not args.pretrain2_path == None:
         train_dataset = MoleculeDataset(root_path=args.pretrain2_path)
-        train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
+        train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, 
+                                  num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
+        )
 
         clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
             
         trainer.fit(model, train_loader, train_episode=2)
 
-    if local_rank == 0:
-        summary_writer.close()
+    # if local_rank == 0:
+    #     summary_writer.close()

@@ -17,7 +17,8 @@ class Collator_pretrain(object):
         vocab, 
         max_length, n_virtual_nodes, add_self_loop=True,
         candi_rate=0.15, mask_rate=0.8, replace_rate=0.1, keep_rate=0.1,
-        fp_disturb_rate=0.15, md_disturb_rate=0.15, subgraph_disturb_rate=0.15,
+        fp_disturb_rate=0.15, md_disturb_rate=0.15, 
+        data_aug1=None, data_aug1_rate=0.2, data_aug2=None, data_aug2_rate=0.2
         ):
         self.vocab = vocab
         self.max_length = max_length
@@ -31,12 +32,19 @@ class Collator_pretrain(object):
 
         self.fp_disturb_rate = fp_disturb_rate
         self.md_disturb_rate = md_disturb_rate
-        self.subgraph_disturb_rate = subgraph_disturb_rate
+        
+        self.data_aug1 = data_aug1
+        self.data_aug1_rate = data_aug1_rate
+        self.data_aug2 = data_aug2
+        self.data_aug2_rate = data_aug2_rate
         
     def bert_mask_nodes(self, g):
-        n_nodes = g.number_of_nodes()
+        n_nodes = g.num_nodes()
         all_ids = np.arange(0, n_nodes, 1, dtype=np.int64)
-        valid_ids = torch.where(g.ndata['vavn']<=0)[0].numpy()
+        
+        valid_mask_nodes = torch.where(g.ndata['contrastive_mark'] == 0)[0].numpy()
+        valid_ids = valid_mask_nodes[g.ndata['vavn'][valid_mask_nodes] <= 0]
+        # valid_ids = torch.where(g.ndata['vavn']<=0)[0].numpy()
         valid_labels = g.ndata['label'][valid_ids].numpy()
         probs = np.ones(len(valid_labels))/len(valid_labels)
         unique_labels = np.unique(np.sort(valid_labels))
@@ -94,30 +102,23 @@ class Collator_pretrain(object):
         
         return md.reshape(b,d)
     
-    def mask_subgraph(self, g):
-        n_nodes = g.number_of_nodes()
-        all_ids = np.arange(0, n_nodes, 1, dtype=np.int64)
-        valid_ids = torch.where(g.ndata['vavn']<=0)[0].numpy()
-        valid_labels = g.ndata['label'][valid_ids].numpy()
-        probs = np.ones(len(valid_labels))/len(valid_labels)
-        unique_labels = np.unique(np.sort(valid_labels))
-        for label in unique_labels:
-            label_pos = (valid_labels==label)
-            probs[label_pos] = probs[label_pos]/np.sum(label_pos)
-        probs = probs/np.sum(probs)
-        mask_ids = np.random.choice(valid_ids, size=int(len(valid_ids)*self.subgraph_disturb_rate),replace=False, p=probs)
-
-        g.ndata['mask_subgraph'] = torch.zeros(n_nodes,dtype=torch.long)
-        g.ndata['mask_subgraph'][mask_ids] = 1
-        subgraph_labels = g.ndata['label'][g.ndata['mask_subgraph']==1].clone()
-        
-        return subgraph_labels
-    
     def __call__(self, samples):
         smiles_list, fps, mds = map(list, zip(*samples))
         graphs = []
+        contrastive_graph1 = []
+        contrastive_graph2 = []
         for smiles in smiles_list:
-            graphs.append(smiles_to_graph(smiles, self.vocab, max_length=self.max_length, n_virtual_nodes=self.n_virtual_nodes, add_self_loop=self.add_self_loop))
+            graph = smiles_to_graph(smiles, self.vocab, max_length=self.max_length, n_virtual_nodes=self.n_virtual_nodes, add_self_loop=self.add_self_loop)
+            graph1 = smiles_to_graph(smiles, self.vocab, max_length=self.max_length, n_virtual_nodes=self.n_virtual_nodes, add_self_loop=self.add_self_loop, augment=self.data_aug1, aug_ratio=self.data_aug1_rate)
+            graph2 = smiles_to_graph(smiles, self.vocab, max_length=self.max_length, n_virtual_nodes=self.n_virtual_nodes, add_self_loop=self.add_self_loop, augment=self.data_aug2, aug_ratio=self.data_aug2_rate)
+            graph.ndata['contrastive_mark'] = torch.zeros(graph.num_nodes()) # 0 denotes original graph
+            graph1.ndata['contrastive_mark'] = torch.ones(graph1.num_nodes()) # 1 denotes data augmentation method 1
+            graph2.ndata['contrastive_mark'] = torch.ones(graph2.num_nodes()) * 2 # 2 denotes data augmentation method 2
+            graphs.append(graph)
+            contrastive_graph1.append(graph1)
+            contrastive_graph2.append(graph2)
+        graphs.extend(contrastive_graph1)
+        graphs.extend(contrastive_graph2)
         batched_graph = dgl.batch(graphs)
         mds = torch.stack(mds, dim=0).reshape(len(smiles_list),-1)
         fps = torch.stack(fps, dim=0).reshape(len(smiles_list),-1)
@@ -125,8 +126,14 @@ class Collator_pretrain(object):
         sl_labels = self.bert_mask_nodes(batched_graph)
         disturbed_fps = self.disturb_fp(fps)
         disturbed_mds = self.disturb_md(mds)
-        subgraph_labels = self.mask_subgraph(batched_graph)
-        return smiles_list, batched_graph, fps, mds, sl_labels, disturbed_fps, disturbed_mds, subgraph_labels
+        
+        # similarly, the fps and mds should be added twice
+        disturbed_mds = torch.cat([disturbed_mds, mds, mds], dim=0)
+        disturbed_fps = torch.cat([disturbed_fps, fps, fps], dim=0)
+        fps = torch.cat([fps, fps, fps], dim=0)
+        mds = torch.cat([mds, mds, mds], dim=0)
+
+        return smiles_list, batched_graph, fps, mds, sl_labels, disturbed_fps, disturbed_mds
 
 class Collator_tune(object):
     def __init__(self, max_length=5, n_virtual_nodes=2, add_self_loop=True):
