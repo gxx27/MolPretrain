@@ -11,6 +11,7 @@ python -u -m torch.distributed.run --nproc_per_node=$nproc_per_node \
     --n_devices $n_devices \
     --config KPGT-B/768 \
     --n_steps 200000 \
+    --batch_size 512 \
     --pretrain1_path /data2/gx/UCSD/chembl29 \
     --data_aug1 subgraph \
     --data_aug1_rate 0.2 \

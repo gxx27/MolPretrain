@@ -33,6 +33,7 @@ def parse_args():
     parser.add_argument("--pretrain2_path", type=str, default=None)
     parser.add_argument("--save_path", type=str, default='../models')
     parser.add_argument("--n_steps", type=int, default=100000)
+    parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--config", type=str, default="KPGT-B/768")
     parser.add_argument("--n_threads", type=int, default=8)
     parser.add_argument("--n_devices", type=int, default=1)
@@ -77,8 +78,8 @@ if __name__ == '__main__':
     )
     train_dataset = MoleculeDataset(root_path=args.pretrain1_path)
     train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), 
-                              batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, 
-                              worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
+                              batch_size=args.batch_size// args.n_devices, num_workers=args.n_threads, 
+                              worker_init_fn=seed_worker, drop_last=True, collate_fn=collator, pin_memory=True
     )
 
     model = LiGhT(
@@ -99,7 +100,7 @@ if __name__ == '__main__':
     ).to(device)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     optimizer = Adam(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
-    lr_scheduler = PolynomialDecayLR(optimizer, warmup_updates=20000, tot_updates=200000,lr=config['lr'], end_lr=1e-9,power=1)
+    lr_scheduler = PolynomialDecayLR(optimizer, warmup_updates=20000, tot_updates=400000,lr=config['lr'], end_lr=1e-9,power=1)
     reg_loss_fn = MSELoss(reduction='none')
     clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
     sl_loss_fn = CrossEntropyLoss(reduction='none')
@@ -117,7 +118,7 @@ if __name__ == '__main__':
     
     if 'mix' not in args.pretrain1_path and not args.pretrain2_path == None:
         train_dataset = MoleculeDataset(root_path=args.pretrain2_path)
-        train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, 
+        train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=args.batch_size// args.n_devices, 
                                   num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
         )
 

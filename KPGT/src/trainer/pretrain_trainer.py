@@ -36,7 +36,8 @@ class Trainer():
         sl_predictions, fp_predictions, md_predictions, z  = model(batched_graph, disturbed_fps, disturbed_mds)
         zi, zj = torch.split(z, z.shape[0] // 2, dim=0)
 
-        mask_replace_keep = batched_graph.ndata['mask'][batched_graph.ndata['mask']>=1].cpu().numpy()
+        # mask_replace_keep = batched_graph.ndata['mask'][batched_graph.ndata['mask']>=1].cpu().numpy()
+        mask_replace_keep = None
         
         return mask_replace_keep, sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds, zi, zj
     
@@ -146,7 +147,10 @@ class Trainer():
         if not os.path.exists(self.args.save_path):
             os.makedirs(self.args.save_path)
         
-        save_path = os.path.join(self.args.save_path, f"{self.args.pretrain_strategy}_{self.n_updates}.pth")
+        if self.args.pretrain2_path == None:
+            save_path = os.path.join(self.args.save_path, f"one_stage_{self.args.pretrain1_path}_{self.n_updates}.pth")
+        else:
+            save_path = os.path.join(self.args.save_path, f"two_stage_{self.args.pretrain1_path}_{self.n_updates}.pth")
         torch.save(model.state_dict(), save_path)
 
     

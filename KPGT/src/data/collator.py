@@ -102,19 +102,161 @@ class Collator_pretrain(object):
         
         return md.reshape(b,d)
     
+    def data_augment(self, augment, aug_ratio, params):
+        edges, atom_pairs_features_in_triplets, bond_features_in_triplets, triplet_labels, virtual_atom_and_virtual_node_labels, paths, line_graph_path_labels, mol_graph_path_labels, virtual_path_labels, self_loop_labels = params
+        
+        if augment == None:
+            pass
+        
+        elif augment == 'drop_nodes':
+            node_num = max(edges[:,0]) + 1
+            edge_num = edges.shape[0]
+            drop_num = int(node_num * aug_ratio)
+            idx_perm = np.random.permutation(node_num - self.n_virtual_nodes)
+            
+            idx_drop = idx_perm[:drop_num].tolist()
+            idx_nondrop = idx_perm[drop_num:].tolist()
+            idx_nondrop.extend(list(range(node_num))[-self.n_virtual_nodes:])
+                            
+            idx_nondrop.sort()
+            idx_dict = {idx_nondrop[n]:n for n in list(range(len(idx_nondrop)))}
+            
+            # nodes drop
+            atom_pairs_features_in_triplets = atom_pairs_features_in_triplets[idx_nondrop]
+            bond_features_in_triplets = bond_features_in_triplets[idx_nondrop]
+            triplet_labels = triplet_labels[idx_nondrop]
+            virtual_atom_and_virtual_node_labels = virtual_atom_and_virtual_node_labels[idx_nondrop]
+            
+            # corresponding edges drop
+            for node in idx_drop:
+                paths = torch.where((paths == node), idx_nondrop[-self.n_virtual_nodes], paths)
+
+            edge_nondrop = np.array([n for n in range(edge_num) if not (edges[n, 0] in idx_drop or edges[n, 1] in idx_drop)]) # edge_num x 2
+            edges = edges[edge_nondrop]
+            paths = paths[edge_nondrop]
+            line_graph_path_labels = line_graph_path_labels[edge_nondrop]
+            mol_graph_path_labels = mol_graph_path_labels[edge_nondrop]
+            virtual_path_labels = virtual_path_labels[edge_nondrop]
+            self_loop_labels = self_loop_labels[edge_nondrop]
+
+            for key in idx_nondrop:
+                edges = np.where((edges == key), idx_dict[key], edges)
+                paths = torch.where((paths == key), idx_dict[key], paths)
+        
+        elif augment == 'permute_edges':
+            node_num = max(edges[:,0]) + 1
+            edge_num = edges.shape[0]
+            permute_num = int(edge_num * aug_ratio)
+            idx_add = np.random.choice(node_num, (permute_num, 2))
+            
+            edge_nondrop = np.random.choice(edge_num, (edge_num - permute_num), replace=False)
+            edge_drop = np.array([n for n in range(edge_num) if not n in edge_nondrop])
+            edge_index = np.concatenate((edges[edge_nondrop, :], idx_add), axis=0)
+            
+            edges = edge_index
+            paths = torch.cat((paths[edge_nondrop], paths[edge_drop]), dim=0)
+            line_graph_path_labels = torch.cat((line_graph_path_labels[edge_nondrop], line_graph_path_labels[edge_drop]), dim=0)
+            mol_graph_path_labels = torch.cat((mol_graph_path_labels[edge_nondrop], mol_graph_path_labels[edge_drop]), dim=0)
+            virtual_path_labels = torch.cat((virtual_path_labels[edge_nondrop], virtual_path_labels[edge_drop]), dim=0)
+            self_loop_labels = torch.cat((self_loop_labels[edge_nondrop], self_loop_labels[edge_drop]), dim=0)
+            
+        elif augment == 'mask_nodes':
+            node_num = max(edges[:,0]) + 1
+            mask_num = int(node_num * aug_ratio)
+            idx_mask = np.random.choice(node_num, mask_num, replace=False)
+            
+            begin_end_token = atom_pairs_features_in_triplets.mean(dim=0)
+            edge_token = bond_features_in_triplets.mean(dim=0)
+            
+            atom_pairs_features_in_triplets[idx_mask] = begin_end_token
+            bond_features_in_triplets[idx_mask] = edge_token
+        
+        elif augment == 'subgraph':
+            node_num = max(edges[:,0]) + 1
+            edge_num = edges.shape[0]
+            sub_num = int(node_num * aug_ratio)
+            
+            virtual = torch.nonzero(virtual_atom_and_virtual_node_labels).view(-1).tolist()
+            idx_sub = [np.random.randint(node_num, size=1)[0]] # random walk start node
+
+            edge_index = edges.T # 2*edge_num
+            idx_neigh = set([n for n in edge_index[1][edge_index[0]==idx_sub[0]]])
+            
+            count = 0
+            while len(idx_sub) <= sub_num:
+                count = count + 1
+                if count > node_num:
+                    break
+                if len(idx_neigh) == 0:
+                    break
+                sample_node = np.random.choice(list(idx_neigh)) # choose one node from start node's neighbor
+                if sample_node in idx_sub or virtual_atom_and_virtual_node_labels[sample_node] != 0: # repetitive sample & sample virtual nodes
+                    continue
+                idx_sub.append(sample_node)
+                idx_neigh.union(set([n for n in edges[1][edges[0]==idx_sub[-1]]])) # continue random sampling
+            
+            idx_drop = [n for n in range(node_num) if not n in idx_sub]
+            idx_nondrop = idx_sub
+            for n in virtual:
+                if n not in idx_nondrop:
+                    idx_nondrop.append(n)
+                    idx_drop.remove(n)
+
+            idx_nondrop.sort()
+            idx_dict = {idx_nondrop[n]:n for n in list(range(len(idx_nondrop)))}
+
+            # nodes drop
+            atom_pairs_features_in_triplets = atom_pairs_features_in_triplets[idx_nondrop]
+            bond_features_in_triplets = bond_features_in_triplets[idx_nondrop]
+            triplet_labels = triplet_labels[idx_nondrop]
+            virtual_atom_and_virtual_node_labels = virtual_atom_and_virtual_node_labels[idx_nondrop]
+            
+            # corresponding edges drop
+            for node in idx_drop:
+                paths = torch.where((paths == node), idx_nondrop[-self.n_virtual_nodes], paths)
+
+            edge_nondrop = np.array([n for n in range(edge_num) if not (edges[n, 0] in idx_drop or edges[n, 1] in idx_drop)]) # edge_num x 2
+            edges = edges[edge_nondrop]
+            paths = paths[edge_nondrop]
+            line_graph_path_labels = line_graph_path_labels[edge_nondrop]
+            mol_graph_path_labels = mol_graph_path_labels[edge_nondrop]
+            virtual_path_labels = virtual_path_labels[edge_nondrop]
+            self_loop_labels = self_loop_labels[edge_nondrop]
+
+            for key in idx_nondrop:
+                edges = np.where((edges == key), idx_dict[key], edges)
+                paths = torch.where((paths == key), idx_dict[key], paths)
+        
+        else:
+            raise ValueError('Unknown data augmentation!')
+        
+        data = (edges[:,0], edges[:,1])
+        g = dgl.graph(data)
+        g.ndata['begin_end'] = atom_pairs_features_in_triplets
+        g.ndata['edge'] = bond_features_in_triplets
+        g.ndata['label'] = triplet_labels
+        g.ndata['vavn'] = virtual_atom_and_virtual_node_labels
+        g.edata['path'] = paths
+        g.edata['lgp'] = line_graph_path_labels
+        g.edata['mgp'] = mol_graph_path_labels
+        g.edata['vp'] = virtual_path_labels
+        g.edata['sl'] = self_loop_labels
+        return g
+    
     def __call__(self, samples):
         smiles_list, fps, mds = map(list, zip(*samples))
         graphs = []
         contrastive_graph1 = []
         contrastive_graph2 = []
         for smiles in smiles_list:
-            graph = smiles_to_graph(smiles, self.vocab, max_length=self.max_length, n_virtual_nodes=self.n_virtual_nodes, add_self_loop=self.add_self_loop)
-            graph1 = smiles_to_graph(smiles, self.vocab, max_length=self.max_length, n_virtual_nodes=self.n_virtual_nodes, add_self_loop=self.add_self_loop, augment=self.data_aug1, aug_ratio=self.data_aug1_rate)
-            graph2 = smiles_to_graph(smiles, self.vocab, max_length=self.max_length, n_virtual_nodes=self.n_virtual_nodes, add_self_loop=self.add_self_loop, augment=self.data_aug2, aug_ratio=self.data_aug2_rate)
-            graph.ndata['contrastive_mark'] = torch.zeros(graph.num_nodes()) # 0 denotes original graph
+            params = smiles_to_graph(smiles, self.vocab, max_length=self.max_length, n_virtual_nodes=self.n_virtual_nodes, add_self_loop=self.add_self_loop)
+            graph0 = self.data_augment(augment=None, aug_ratio=None, params=params)
+            graph1 = self.data_augment(augment=self.data_aug1, aug_ratio=self.data_aug1_rate, params=params)
+            graph2 = self.data_augment(augment=self.data_aug2, aug_ratio=self.data_aug2_rate, params=params)
+            graph0.ndata['contrastive_mark'] = torch.zeros(graph0.num_nodes()) # 0 denotes original graph
             graph1.ndata['contrastive_mark'] = torch.ones(graph1.num_nodes()) # 1 denotes data augmentation method 1
             graph2.ndata['contrastive_mark'] = torch.ones(graph2.num_nodes()) * 2 # 2 denotes data augmentation method 2
-            graphs.append(graph)
+            graphs.append(graph0)
             contrastive_graph1.append(graph1)
             contrastive_graph2.append(graph2)
         graphs.extend(contrastive_graph1)
