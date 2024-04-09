@@ -25,7 +25,6 @@ import warnings
 warnings.filterwarnings("ignore")
 local_rank = int(os.environ['LOCAL_RANK'])
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Arguments for training LiGhT")
     parser.add_argument("--seed", type=int, default=22)
@@ -37,13 +36,8 @@ def parse_args():
     parser.add_argument("--n_threads", type=int, default=8)
     parser.add_argument("--n_devices", type=int, default=1)
     parser.add_argument("--pretrain_strategy", type=str, default=None) # Pretrain strategy: rm_none_pred, rm_fp_pred, rm_md_pred, rm_both_pred
-    parser.add_argument("--data_aug1", type=str, default=None, help='choose from drop_nodes, permute_edges, mask_nodes, subgraph')
-    parser.add_argument("--data_aug1_rate", type=float, default=0.2)
-    parser.add_argument("--data_aug2", type=str, default=None, help='choose from drop_nodes, permute_edges, mask_nodes, subgraph')
-    parser.add_argument("--data_aug2_rate", type=float, default=0.2)
     args = parser.parse_args()
     return args
-
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
@@ -53,12 +47,10 @@ if __name__ == '__main__':
     args = parse_args()
     config = config_dict[args.config]
     print(config)
-    print(args)
     torch.backends.cudnn.benchmark = True
     torch.cuda.set_device(local_rank)
     torch.distributed.init_process_group(backend='nccl')
     device = torch.device('cuda', local_rank)
-    # device = torch.device('cpu')
     set_random_seed(args.seed)
     print(local_rank)
     val_results, test_results, train_results = [], [], []
@@ -99,7 +91,7 @@ if __name__ == '__main__':
     ).to(device)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     optimizer = Adam(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
-    lr_scheduler = PolynomialDecayLR(optimizer, warmup_updates=20000, tot_updates=400000,lr=config['lr'], end_lr=1e-9,power=1)
+    lr_scheduler = PolynomialDecayLR(optimizer, warmup_updates=20000, tot_updates=200000,lr=config['lr'], end_lr=1e-9,power=1)
     reg_loss_fn = MSELoss(reduction='none')
     clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
     sl_loss_fn = CrossEntropyLoss(reduction='none')
@@ -107,21 +99,19 @@ if __name__ == '__main__':
     reg_evaluator = Evaluator("mix", reg_metric, train_dataset.d_mds)
     clf_evaluator = Evaluator("mix", clf_metric, train_dataset.d_fps)
     result_tracker = Result_Tracker(reg_metric)
-
+    
     trainer = Trainer(args, optimizer, lr_scheduler, reg_loss_fn, clf_loss_fn, sl_loss_fn, 
                       reg_evaluator, clf_evaluator, result_tracker, summary_writer, device=device,local_rank=local_rank)
     trainer.fit(model, train_loader, train_episode=1)
-
+    
     del train_dataset # reduce memory cost
     del train_loader
     
     if 'mix' not in args.pretrain1_path and args.pretrain2_path is not None:
         train_dataset = MoleculeDataset(root_path=args.pretrain2_path)
         train_loader = DataLoader(
-            train_dataset, sampler=DistributedSampler(train_dataset), batch_size=args.batch_size// args.n_devices, 
-            
-                                  num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
-        
+            train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, 
+            num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
         )
 
         clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
