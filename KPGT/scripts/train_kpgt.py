@@ -33,7 +33,6 @@ def parse_args():
     parser.add_argument("--pretrain2_path", type=str, default=None)
     parser.add_argument("--save_path", type=str, default='../models')
     parser.add_argument("--n_steps", type=int, default=100000)
-    parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--config", type=str, default="KPGT-B/768")
     parser.add_argument("--n_threads", type=int, default=8)
     parser.add_argument("--n_devices", type=int, default=1)
@@ -67,19 +66,19 @@ if __name__ == '__main__':
     # if local_rank == 0:
     #     summary_writer = SummaryWriter(f"tensorboard/pretrain-mix-{args.config}", )
     # else: 
-    #     summary_writer = None 
+    #     summary_writer = None
     summary_writer = None
     
     vocab = Vocab(N_ATOM_TYPES, N_BOND_TYPES)        
     collator = Collator_pretrain(
-        vocab, max_length=config['path_length'], n_virtual_nodes=2, 
-        candi_rate=config['candi_rate'], fp_disturb_rate=config['fp_disturb_rate'], md_disturb_rate=config['md_disturb_rate'], 
-        data_aug1=args.data_aug1, data_aug1_rate=args.data_aug1_rate, data_aug2=args.data_aug2, data_aug2_rate=args.data_aug2_rate
+        vocab, max_length=config['path_length'], n_virtual_nodes=4, 
+        candi_rate=config['candi_rate'], fp_disturb_rate=config['fp_disturb_rate'], 
+        md_disturb_rate=config['md_disturb_rate'], subgraph_sample_rate=config['subgraph_sample_rate']
     )
     train_dataset = MoleculeDataset(root_path=args.pretrain1_path)
-    train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), 
-                              batch_size=args.batch_size// args.n_devices, num_workers=args.n_threads, 
-                              worker_init_fn=seed_worker, drop_last=True, collate_fn=collator, pin_memory=True
+    train_loader = DataLoader(
+        train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, 
+        num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
     )
 
     model = LiGhT(
@@ -116,10 +115,13 @@ if __name__ == '__main__':
     del train_dataset # reduce memory cost
     del train_loader
     
-    if 'mix' not in args.pretrain1_path and not args.pretrain2_path == None:
+    if 'mix' not in args.pretrain1_path and args.pretrain2_path is not None:
         train_dataset = MoleculeDataset(root_path=args.pretrain2_path)
-        train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=args.batch_size// args.n_devices, 
+        train_loader = DataLoader(
+            train_dataset, sampler=DistributedSampler(train_dataset), batch_size=args.batch_size// args.n_devices, 
+            
                                   num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
+        
         )
 
         clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
