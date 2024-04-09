@@ -221,11 +221,14 @@ class TripletEmbedding(nn.Module):
         self.in_proj = MLP(d_g_feats*2, d_g_feats, 2, activation)
         self.fp_proj = MLP(d_fp_feats, d_g_feats, 2, activation)
         self.md_proj = MLP(d_md_feats, d_g_feats, 2, activation)
-    def forward(self, node_h, edge_h, fp, md, indicators):
+    def forward(self, node_h, edge_h, disturbed_fp, disturbed_md, indicators, fp=None, md=None):
         triplet_h = torch.cat([node_h, edge_h], dim=-1)
         triplet_h = self.in_proj(triplet_h)
-        triplet_h[indicators==1] = self.fp_proj(fp) # disturbed fp
-        triplet_h[indicators==2] = self.md_proj(md) # disturbed md
+        triplet_h[indicators==1] = self.fp_proj(disturbed_fp) # disturbed fp
+        triplet_h[indicators==2] = self.md_proj(disturbed_md) # disturbed md
+        if fp is not None and md is not None:
+            triplet_h[indicators==3] = self.fp_proj(fp)
+            triplet_h[indicators==4] = self.md_proj(md)
         return triplet_h
 
 class LiGhTPredictor(nn.Module):
@@ -277,31 +280,25 @@ class LiGhTPredictor(nn.Module):
             nn.Linear(d_g_feats, d_md_feats)
         )
         
-        self.contrastive_predictor = nn.Sequential(
+        self.subgraph_predictor = nn.Sequential(
             nn.Linear(d_g_feats, d_g_feats),
             activation,
-            nn.Linear(d_g_feats, d_g_feats)
+            nn.Linear(d_g_feats, n_node_types)
         )
         
         self.apply(lambda module: init_params(module))
 
-    def forward(self, g, fp, md):
+    def forward(self, g, disturbed_fp, disturbed_md, fp=None, md=None):
         indicators = g.ndata['vavn'] # 0 indicates normal atoms and nodes (triplets); -1 indicates virutal atoms; >=1 indicate virtual nodes 
         # Input
         node_h = self.node_emb(g.ndata['begin_end'], indicators)          
         edge_h = self.edge_emb(g.ndata['edge'], indicators)
-        # triplet_h = self.triplet_emb(node_h, edge_h, disturbed_fp, disturbed_md, indicators, fp, md)
-        triplet_h = self.triplet_emb(node_h, edge_h, fp, md, indicators)
+        triplet_h = self.triplet_emb(node_h, edge_h, disturbed_fp, disturbed_md, indicators, fp, md)
         triplet_h[g.ndata['mask']==1] = self.mask_emb.weight
         # Model
         triplet_h = self.model(g, triplet_h)
-        # Readout
-        unbatched_graph = dgl.unbatch(g)
-        batched_graph = dgl.batch([subg for subg in unbatched_graph if subg.ndata['contrastive_mark'][0] != 0])
-        batched_graph.ndata['contrast'] = triplet_h[g.ndata['contrastive_mark']!=0]
-        readout = dgl.readout_nodes(batched_graph, 'contrast', op=self.readout_mode)
         # Predict
-        return self.node_predictor(triplet_h[g.ndata['mask']>=1]), self.fp_predictor(triplet_h[indicators==1]), self.md_predictor(triplet_h[indicators==2]), self.contrastive_predictor(readout)
+        return self.node_predictor(triplet_h[g.ndata['mask']>=1]), self.fp_predictor(triplet_h[indicators==1]), self.md_predictor(triplet_h[indicators==2]), self.subgraph_predictor(triplet_h[g.ndata['mask_subgraph']==1])
 
     def forward_tune(self, g, fp, md):
         indicators = g.ndata['vavn'] # 0 indicates normal atoms and nodes (triplets); -1 indicates virutal atoms; >=1 indicate virtual nodes 

@@ -183,21 +183,18 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
             virtual_path_labels.append(0)
             self_loop_labels.append(1)
     edges = np.array(edges, dtype=np.int64)
-    
-    # original node features
-    atom_pairs_features_in_triplets = torch.FloatTensor(atom_pairs_features_in_triplets)
-    bond_features_in_triplets = torch.FloatTensor(bond_features_in_triplets)
-    triplet_labels = torch.LongTensor(triplet_labels)
-    virtual_atom_and_virtual_node_labels = torch.LongTensor(virtual_atom_and_virtual_node_labels)
-    
-    # original edge features
-    paths = torch.LongTensor(paths)
-    line_graph_path_labels = torch.BoolTensor(line_graph_path_labels)
-    mol_graph_path_labels = torch.BoolTensor(mol_graph_path_labels)
-    virtual_path_labels = torch.BoolTensor(virtual_path_labels)
-    self_loop_labels = torch.BoolTensor(self_loop_labels)
-    
-    return [edges, atom_pairs_features_in_triplets, bond_features_in_triplets, triplet_labels, virtual_atom_and_virtual_node_labels, paths, line_graph_path_labels, mol_graph_path_labels, virtual_path_labels, self_loop_labels]
+    data = (edges[:,0], edges[:,1])
+    g = dgl.graph(data)
+    g.ndata['begin_end'] = torch.FloatTensor(atom_pairs_features_in_triplets)
+    g.ndata['edge'] = torch.FloatTensor(bond_features_in_triplets)
+    g.ndata['label'] = torch.LongTensor(triplet_labels)
+    g.ndata['vavn'] = torch.LongTensor(virtual_atom_and_virtual_node_labels)
+    g.edata['path'] = torch.LongTensor(paths)
+    g.edata['lgp'] = torch.BoolTensor(line_graph_path_labels)
+    g.edata['mgp'] = torch.BoolTensor(mol_graph_path_labels)
+    g.edata['vp'] = torch.BoolTensor(virtual_path_labels)
+    g.edata['sl'] = torch.BoolTensor(self_loop_labels)
+    return g
 
 
 def smiles_to_graph_tune(smiles, max_length=5, n_virtual_nodes=8, add_self_loop=True):

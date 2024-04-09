@@ -26,34 +26,19 @@ class Trainer():
         self.train_episode = 1 # mark training episode 1 for the first and 2 for the second
     
     def _forward_epoch(self, model, batched_data):
-        (smiles, batched_graph, fps, mds, sl_labels, disturbed_fps, disturbed_mds) = batched_data
+        (smiles, batched_graph, fps, mds, sl_labels, disturbed_fps, disturbed_mds, subgraph_labels) = batched_data
         batched_graph = batched_graph.to(self.device)
         fps = fps.to(self.device)
         mds = mds.to(self.device)
         sl_labels = sl_labels.to(self.device)
         disturbed_fps = disturbed_fps.to(self.device)
         disturbed_mds = disturbed_mds.to(self.device)
-        sl_predictions, fp_predictions, md_predictions, z  = model(batched_graph, disturbed_fps, disturbed_mds)
-        zi, zj = torch.split(z, z.shape[0] // 2, dim=0)
+        subgraph_labels = subgraph_labels.to(self.device)
+        sl_predictions, fp_predictions, md_predictions, subgraph_prediction  = model(batched_graph, disturbed_fps, disturbed_mds, fps, mds)
 
-        # mask_replace_keep = batched_graph.ndata['mask'][batched_graph.ndata['mask']>=1].cpu().numpy()
-        mask_replace_keep = None
+        mask_replace_keep = batched_graph.ndata['mask'][batched_graph.ndata['mask']>=1].cpu().numpy()
         
-        return mask_replace_keep, sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds, zi, zj
-    
-    def loss_cl(self, x1, x2):
-        T = 0.1
-        batch_size = x1.shape[0]
-        
-        x1_abs = x1.norm(dim=1)
-        x2_abs = x2.norm(dim=1)
-
-        sim_matrix = torch.einsum('ik,jk->ij', x1, x2) / torch.einsum('i,j->ij', x1_abs, x2_abs)
-        sim_matrix = torch.exp(sim_matrix / T)
-        pos_sim = sim_matrix[range(batch_size), range(batch_size)]
-        loss = pos_sim / (sim_matrix.sum(dim=1) - pos_sim)
-        loss = - torch.log(loss).mean()
-        return loss
+        return mask_replace_keep, sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds, subgraph_prediction, subgraph_labels
     
     def train_epoch(self, model, train_loader, epoch_idx):
         model.train()
