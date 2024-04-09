@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 n_devices=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
 nproc_per_node=$n_devices
 n_threads=$((n_devices * 2))

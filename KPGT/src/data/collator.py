@@ -17,7 +17,7 @@ class Collator_pretrain(object):
         vocab, 
         max_length, n_virtual_nodes, add_self_loop=True,
         candi_rate=0.15, mask_rate=0.8, replace_rate=0.1, keep_rate=0.1,
-        fp_disturb_rate=0.15, md_disturb_rate=0.15, subgraph_disturb_rate=0.15,
+        fp_disturb_rate=0.15, md_disturb_rate=0.15, subgraph_sample_rate=0.15,
         ):
         self.vocab = vocab
         self.max_length = max_length
@@ -31,7 +31,7 @@ class Collator_pretrain(object):
 
         self.fp_disturb_rate = fp_disturb_rate
         self.md_disturb_rate = md_disturb_rate
-        self.subgraph_disturb_rate = subgraph_disturb_rate
+        self.subgraph_sample_rate = subgraph_sample_rate
         
     def bert_mask_nodes(self, g):
         n_nodes = g.number_of_nodes()
@@ -95,20 +95,35 @@ class Collator_pretrain(object):
         return md.reshape(b,d)
     
     def mask_subgraph(self, g):
-        n_nodes = g.number_of_nodes()
-        all_ids = np.arange(0, n_nodes, 1, dtype=np.int64)
-        valid_ids = torch.where(g.ndata['vavn']<=0)[0].numpy()
-        valid_labels = g.ndata['label'][valid_ids].numpy()
-        probs = np.ones(len(valid_labels))/len(valid_labels)
-        unique_labels = np.unique(np.sort(valid_labels))
-        for label in unique_labels:
-            label_pos = (valid_labels==label)
-            probs[label_pos] = probs[label_pos]/np.sum(label_pos)
-        probs = probs/np.sum(probs)
-        mask_ids = np.random.choice(valid_ids, size=int(len(valid_ids)*self.subgraph_disturb_rate),replace=False, p=probs)
+        node_num = g.num_nodes()
+        sub_num = int(node_num * self.subgraph_sample_rate)
+        
+        virtual = torch.nonzero(g.ndata['vavn']).view(-1).tolist()
+        idx_sub = [np.random.randint(node_num, size=1)[0]] # random walk start node
 
-        g.ndata['mask_subgraph'] = torch.zeros(n_nodes,dtype=torch.long)
-        g.ndata['mask_subgraph'][mask_ids] = 1
+        edge_index = torch.stack(g.edges()) # 2*edge_num
+        edges = edge_index.T
+        idx_neigh = set([n for n in edge_index[1][edge_index[0]==idx_sub[0]]])
+        
+        count = 0
+        while len(idx_sub) <= sub_num:
+            count = count + 1
+            if count > node_num:
+                break
+            if len(idx_neigh) == 0:
+                break
+            sample_node = np.random.choice(list(idx_neigh)) # choose one node from start node's neighbor
+            if sample_node in idx_sub or g.ndata['vavn'][sample_node] != 0: # repetitive sample & sample virtual nodes
+                continue
+            idx_sub.append(sample_node)
+            idx_neigh.union(set([n for n in edges[1][edges[0]==idx_sub[-1]]])) # continue random sampling
+        
+        for n in virtual:
+            if n in idx_sub:
+                idx_sub.remove(n)
+
+        g.ndata['mask_subgraph'] = torch.zeros(node_num, dtype=torch.long)
+        g.ndata['mask_subgraph'][idx_sub] = 1
         subgraph_labels = g.ndata['label'][g.ndata['mask_subgraph']==1].clone()
         
         return subgraph_labels

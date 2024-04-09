@@ -9,7 +9,6 @@ from torch.optim import Adam
 from torch.nn import MSELoss, BCEWithLogitsLoss, CrossEntropyLoss
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data.distributed import DistributedSampler
-import dgl
 import numpy as np
 import os
 import random
@@ -30,9 +29,9 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=22)
     parser.add_argument("--pretrain1_path", type=str, default=None)
     parser.add_argument("--pretrain2_path", type=str, default=None)
-    parser.add_argument("--save_path", type=str, default='/data1/gx/KPGT/models/pretrained/base/')
+    parser.add_argument("--save_path", type=str, default='../models')
     parser.add_argument("--n_steps", type=int, default=100000)
-    parser.add_argument("--config", type=str, default="base")
+    parser.add_argument("--config", type=str, default="KPGT-B/768")
     parser.add_argument("--n_threads", type=int, default=8)
     parser.add_argument("--n_devices", type=int, default=1)
     parser.add_argument("--pretrain_strategy", type=str, default=None) # Pretrain strategy: rm_none_pred, rm_fp_pred, rm_md_pred, rm_both_pred
@@ -55,15 +54,23 @@ if __name__ == '__main__':
     print(local_rank)
     val_results, test_results, train_results = [], [], []
  
-    if local_rank == 0:
-        summary_writer = SummaryWriter(f"tensorboard/pretrain-mix-{args.config}", )
-    else: 
-        summary_writer = None 
+    # if local_rank == 0:
+    #     summary_writer = SummaryWriter(f"tensorboard/pretrain-mix-{args.config}", )
+    # else: 
+    #     summary_writer = None
+    summary_writer = None
     
     vocab = Vocab(N_ATOM_TYPES, N_BOND_TYPES)        
-    collator = Collator_pretrain(vocab, max_length=config['path_length'], n_virtual_nodes=4, candi_rate=config['candi_rate'], fp_disturb_rate=config['fp_disturb_rate'], md_disturb_rate=config['md_disturb_rate'], subgraph_disturb_rate=config['subgraph_disturb_rate'])
+    collator = Collator_pretrain(
+        vocab, max_length=config['path_length'], n_virtual_nodes=4, 
+        candi_rate=config['candi_rate'], fp_disturb_rate=config['fp_disturb_rate'], 
+        md_disturb_rate=config['md_disturb_rate'], subgraph_sample_rate=config['subgraph_sample_rate']
+    )
     train_dataset = MoleculeDataset(root_path=args.pretrain1_path)
-    train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
+    train_loader = DataLoader(
+        train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, 
+        num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
+    )
 
     model = LiGhT(
         d_node_feats=config['d_node_feats'],
@@ -99,13 +106,16 @@ if __name__ == '__main__':
     del train_dataset # reduce memory cost
     del train_loader
     
-    if 'mix' not in args.pretrain1_path:
+    if 'mix' not in args.pretrain1_path and args.pretrain2_path is not None:
         train_dataset = MoleculeDataset(root_path=args.pretrain2_path)
-        train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
+        train_loader = DataLoader(
+            train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, 
+            num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
+        )
 
         clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
             
         trainer.fit(model, train_loader, train_episode=2)
 
-    if local_rank == 0:
-        summary_writer.close()
+    # if local_rank == 0:
+    #     summary_writer.close()
