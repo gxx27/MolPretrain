@@ -1,26 +1,30 @@
 # Pre-training of heterogeneous graph neural networks for molecular graphs
 
 ## Dataset
-Dataset are available at the Google Drive link:https://drive.google.com/drive/folders/1FPmZilTbS5qnR-ehOZxn0aSf6y5gg8Go
+Plase use gdown to download the pre-training datasets
+```shell
+gdown 1Vo8X0MN_Ni7H1HJRR4NKrV1lzQN4A_fu # for chembl dataset
+gdown 14YJIlgHEu4Qrp1asYxgzZNCu3GZxi2l5 # for pubchem dataset
+```
 
 ## KPGT
 First, you need to download the dataset and pre-trained model in the file KPGT/
 
 and then build the conda environment
-```powershell
+```shell
 conda env create
 conda activate KPGT
 ```
 
 For pre-training, run the following command
-```powershell
+```shell
 cd scripts
 ./pretrain.sh
 ```
 to do the pretraining
 
 For fine-tuning, run the following command
-```powershell
+```shell
 cd scripts
 ./finetune_classification.sh # downstream task is classification
 
@@ -29,13 +33,4 @@ cd scripts
 ```
 to do the fine-tuning
 
-You can change the downstream task in the shell files, please choose 5-6 tasks which performs best.
-
-## Files
-KPGT: dynamic masking + md_pred + fp_pred + enlarged dataset
-
-rm_both_pred: dynamic masking + enlarged dataset
-
-rm_fp_pred: dynamic masking + md_pred + enlarged dataset
-
-rm_md_pred: dynamic masking + fp_pred + enlarged dataset
+You can change the downstream task in the shell files.

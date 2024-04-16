@@ -1,11 +1,10 @@
 import os
 import torch
-import numpy as np
-from sklearn.metrics import f1_score
+import wandb
 
 class Trainer():
     def __init__(self, args, optimizer, lr_scheduler, reg_loss_fn, clf_loss_fn, sl_loss_fn, 
-                 reg_evaluator, clf_evaluator, result_tracker, summary_writer, device, ddp=False, local_rank=1):
+                 reg_evaluator, clf_evaluator, result_tracker, device, ddp=False, local_rank=1):
         
         self.args = args
         self.optimizer = optimizer
@@ -16,11 +15,10 @@ class Trainer():
         self.reg_evaluator = reg_evaluator
         self.clf_evaluator = clf_evaluator
         self.result_tracker = result_tracker
-        self.summary_writer = summary_writer
         self.device = device
         self.ddp = ddp
         self.local_rank = local_rank
-        self.n_updates = 0      
+        self.n_updates = 0
     
         self.training_updates = 0
         self.train_episode = 1 # mark training episode 1 for the first and 2 for the second
@@ -65,42 +63,23 @@ class Trainer():
             self.n_updates += 1
             self.training_updates += 1
             self.lr_scheduler.step()
-            if self.summary_writer is not None and self.local_rank == 0:
-                loss_mask = self.sl_loss_fn(sl_predictions.detach().cpu()[mask_replace_keep==1],sl_labels.detach().cpu()[mask_replace_keep==1]).mean()
-                loss_replace = self.sl_loss_fn(sl_predictions.detach().cpu()[mask_replace_keep==2],sl_labels.detach().cpu()[mask_replace_keep==2]).mean()
-                loss_keep = self.sl_loss_fn(sl_predictions.detach().cpu()[mask_replace_keep==3],sl_labels.detach().cpu()[mask_replace_keep==3]).mean()
-                preds = np.argmax(sl_predictions.detach().cpu().numpy(),axis=-1)
-                pred_subgraph = np.argmax(subgraph_prediction.detach().cpu().numpy(),axis=-1)
-                labels = sl_labels.detach().cpu().numpy()
-                labels_subgraph = subgraph_labels.detach().cpu().numpy()
-                self.summary_writer.add_scalar('Loss/loss_tot', loss.item(), self.n_updates)
-                self.summary_writer.add_scalar('Loss/loss_bert', sl_loss.item(), self.n_updates)
-                self.summary_writer.add_scalar('Loss/loss_mask', loss_mask.item(), self.n_updates)
-                self.summary_writer.add_scalar('Loss/loss_replace', loss_replace.item(), self.n_updates)
-                self.summary_writer.add_scalar('Loss/loss_keep', loss_keep.item(), self.n_updates)
+
+            if self.local_rank == 0:
+                if self.args.pretrain_strategy == 'rm_fp_pred':
+                    wandb.log({'train_loss': loss, 'sl_loss': sl_loss, 'md_loss': md_loss, 'subgraph_loss': subgraph_loss, 'lr': self.optimizer.state_dict()['param_groups'][0]['lr']})
                 
-                if self.args.pretrain_strategy != 'rm_fp_pred':
-                    self.summary_writer.add_scalar('Loss/loss_clf', fp_loss.item(), self.n_updates)
-                if self.args.pretrain_strategy != 'rm_md_pred':
-                    self.summary_writer.add_scalar('Loss/loss_reg', md_loss.item(), self.n_updates)
+                elif self.args.pretrain_strategy == 'rm_md_pred':
+                    wandb.log({'train_loss': loss, 'sl_loss': sl_loss, 'fp_loss': fp_loss, 'subgraph_loss': subgraph_loss, 'lr': self.optimizer.state_dict()['param_groups'][0]['lr']})
+                    
+                elif self.args.pretrain_strategy == 'rm_both_pred':
+                    wandb.log({'train_loss': loss, 'sl_loss': sl_loss, 'subgraph_loss': subgraph_loss, 'lr': self.optimizer.state_dict()['param_groups'][0]['lr']})
+                    
+                elif self.args.pretrain_strategy == 'rm_none_pred':
+                    wandb.log({'train_loss': loss, 'sl_loss': sl_loss, 'fp_loss': fp_loss, 'md_loss': md_loss, 'subgraph_loss': subgraph_loss, 'lr': self.optimizer.state_dict()['param_groups'][0]['lr']})
             
-                self.summary_writer.add_scalar('Loss/loss_subgraph', subgraph_loss.item(), self.n_updates)
-                self.summary_writer.add_scalar('LR', torch.tensor(self.lr_scheduler.get_lr()[-1]).item(), self.n_updates)
-                
-                self.summary_writer.add_scalar('F1_micro/all', f1_score(preds, labels, average='micro'), self.n_updates)
-                self.summary_writer.add_scalar('F1_macro/all', f1_score(preds, labels, average='macro'), self.n_updates)
-                self.summary_writer.add_scalar('F1_micro/mask', f1_score(preds[mask_replace_keep==1], labels[mask_replace_keep==1], average='micro'), self.n_updates)
-                self.summary_writer.add_scalar('F1_macro/mask', f1_score(preds[mask_replace_keep==1], labels[mask_replace_keep==1], average='macro'), self.n_updates)
-                self.summary_writer.add_scalar('F1_micro/replace', f1_score(preds[mask_replace_keep==2], labels[mask_replace_keep==2], average='micro'), self.n_updates)
-                self.summary_writer.add_scalar('F1_macro/replace', f1_score(preds[mask_replace_keep==2], labels[mask_replace_keep==2], average='macro'), self.n_updates)
-                self.summary_writer.add_scalar('F1_micro/keep', f1_score(preds[mask_replace_keep==3], labels[mask_replace_keep==3], average='micro'), self.n_updates)
-                self.summary_writer.add_scalar('F1_macro/keep', f1_score(preds[mask_replace_keep==3], labels[mask_replace_keep==3], average='macro'), self.n_updates)
-                self.summary_writer.add_scalar('F1_micro/subgraph', f1_score(pred_subgraph, labels_subgraph, average='micro'), self.n_updates)
-                self.summary_writer.add_scalar('F1_macro/subgraph', f1_score(pred_subgraph, labels_subgraph, average='macro'), self.n_updates)
-                self.summary_writer.add_scalar(f'Clf/{self.clf_evaluator.eval_metric}_all', np.mean(self.clf_evaluator.eval(fps, fp_predictions)), self.n_updates)
             if self.n_updates % 1000 == 0:
                 if self.local_rank == 0:
-                    print('%d steps finished!' % self.n_updates)               
+                    print('%d steps finished!' % self.n_updates)
             if self.training_updates == self.args.n_steps:
                 if self.local_rank == 0:
                     print(f'now the update step is: {self.n_updates}')
@@ -109,6 +88,7 @@ class Trainer():
 
     def fit(self, model, train_loader, train_episode):
         if self.local_rank == 0:
+            print('Training steps:', self.args.n_steps)
             if 'chembl' in train_loader.dataset.root_path:
                 print('Training on ChEMBL dataset!')
             elif 'pubchem' in train_loader.dataset.root_path:
