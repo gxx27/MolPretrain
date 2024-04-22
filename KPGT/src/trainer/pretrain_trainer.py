@@ -1,11 +1,11 @@
-import torch
-import numpy as np
-from sklearn.metrics import f1_score
 import os
+import wandb
+import torch
+import torch.nn.functional as F
 
 class Trainer():
-    def __init__(self, args, optimizer, lr_scheduler, reg_loss_fn, clf_loss_fn, sl_loss_fn, 
-                 reg_evaluator, clf_evaluator, result_tracker, summary_writer, device, ddp=False, local_rank=1):
+    def __init__(self, args, optimizer, lr_scheduler, reg_loss_fn, clf_loss_fn, sl_loss_fn, contrastive_loss_fn,
+                 reg_evaluator, clf_evaluator, result_tracker, device, ddp=False, local_rank=1):
         
         self.args = args
         self.optimizer = optimizer
@@ -13,10 +13,10 @@ class Trainer():
         self.reg_loss_fn = reg_loss_fn
         self.clf_loss_fn = clf_loss_fn
         self.sl_loss_fn = sl_loss_fn
+        self.contrastive_loss_fn = contrastive_loss_fn
         self.reg_evaluator = reg_evaluator
         self.clf_evaluator = clf_evaluator
         self.result_tracker = result_tracker
-        self.summary_writer = summary_writer
         self.device = device
         self.ddp = ddp
         self.local_rank = local_rank
@@ -34,87 +34,78 @@ class Trainer():
         disturbed_fps = disturbed_fps.to(self.device)
         disturbed_mds = disturbed_mds.to(self.device)
         sl_predictions, fp_predictions, md_predictions, z  = model(batched_graph, disturbed_fps, disturbed_mds)
-        zi, zj = torch.split(z, z.shape[0] // 2, dim=0)
-
-        # mask_replace_keep = batched_graph.ndata['mask'][batched_graph.ndata['mask']>=1].cpu().numpy()
-        mask_replace_keep = None
         
-        return mask_replace_keep, sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds, zi, zj
-    
-    def loss_cl(self, x1, x2):
+        return sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds, z
+
+    def info_nce_loss(self, features):
         T = 0.1
-        batch_size = x1.shape[0]
-        
-        x1_abs = x1.norm(dim=1)
-        x2_abs = x2.norm(dim=1)
+        labels = torch.cat([torch.arange(features.shape[0]) for _ in range(2)], dim=0)
+        labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float() # broadcast
+        labels = labels.to(self.device)
 
-        sim_matrix = torch.einsum('ik,jk->ij', x1, x2) / torch.einsum('i,j->ij', x1_abs, x2_abs)
-        sim_matrix = torch.exp(sim_matrix / T)
-        pos_sim = sim_matrix[range(batch_size), range(batch_size)]
-        loss = pos_sim / (sim_matrix.sum(dim=1) - pos_sim)
-        loss = - torch.log(loss).mean()
-        return loss
+        features = F.normalize(features, dim=1)
+
+        similarity_matrix = torch.matmul(features, features.T)
+
+        # discard the main diagonal from both: labels and similarities matrix
+        mask = torch.eye(labels.shape[0], dtype=torch.bool).to(self.device)
+        labels = labels[~mask].view(labels.shape[0], -1)
+        similarity_matrix = similarity_matrix[~mask].view(similarity_matrix.shape[0], -1)
+
+        # select and combine multiple positives
+        positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
+
+        # select only the negatives the negatives
+        negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
+
+        logits = torch.cat([positives, negatives], dim=1)
+        labels = torch.zeros(logits.shape[0], dtype=torch.long).to(self.device) # positives in logits[:, 0] so the probability should be the max
+
+        logits = logits / T
+        return logits, labels
     
     def train_epoch(self, model, train_loader, epoch_idx):
         model.train()
         for batch_idx, batched_data in enumerate(train_loader):
-            try:
-                self.optimizer.zero_grad()
-                mask_replace_keep, sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds, zi, zj = self._forward_epoch(model, batched_data)
-                sl_loss = self.sl_loss_fn(sl_predictions, sl_labels).mean()
-                fp_loss = self.clf_loss_fn(fp_predictions, fps).mean()
-                md_loss = self.reg_loss_fn(md_predictions, mds).mean()
-                contrastive_loss = self.loss_cl(zi, zj).mean()
+            self.optimizer.zero_grad()
+            sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds, z = self._forward_epoch(model, batched_data)
+            sl_loss = self.sl_loss_fn(sl_predictions, sl_labels).mean()
+            fp_loss = self.clf_loss_fn(fp_predictions, fps).mean()
+            md_loss = self.reg_loss_fn(md_predictions, mds).mean()
+            
+            logits, labels = self.info_nce_loss(z)
+            contrastive_loss = self.contrastive_loss_fn(logits, labels).mean()
 
-                loss = (sl_loss + fp_loss + md_loss + contrastive_loss) / 4
+            loss = (sl_loss + fp_loss + md_loss + contrastive_loss) / 4
+            
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
+            self.optimizer.step()
+            self.n_updates += 1
+            self.training_updates += 1
+            self.lr_scheduler.step()
+            
+            if self.local_rank == 0:
+                if self.args.pretrain_strategy == 'rm_fp_pred':
+                    wandb.log({'train_loss': loss, 'sl_loss': sl_loss, 'md_loss': md_loss, 'contrastive_loss': contrastive_loss, 'lr': self.optimizer.state_dict()['param_groups'][0]['lr']})
                 
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
-                self.optimizer.step()
-                self.n_updates += 1
-                self.training_updates += 1
-                self.lr_scheduler.step()
-                if self.summary_writer is not None and self.local_rank == 0:
-                    loss_mask = self.sl_loss_fn(sl_predictions.detach().cpu()[mask_replace_keep==1],sl_labels.detach().cpu()[mask_replace_keep==1]).mean()
-                    loss_replace = self.sl_loss_fn(sl_predictions.detach().cpu()[mask_replace_keep==2],sl_labels.detach().cpu()[mask_replace_keep==2]).mean()
-                    loss_keep = self.sl_loss_fn(sl_predictions.detach().cpu()[mask_replace_keep==3],sl_labels.detach().cpu()[mask_replace_keep==3]).mean()
-                    preds = np.argmax(sl_predictions.detach().cpu().numpy(),axis=-1)
-                    labels = sl_labels.detach().cpu().numpy()
-                    self.summary_writer.add_scalar('Loss/loss_tot', loss.item(), self.n_updates)
-                    self.summary_writer.add_scalar('Loss/loss_bert', sl_loss.item(), self.n_updates)
-                    self.summary_writer.add_scalar('Loss/loss_mask', loss_mask.item(), self.n_updates)
-                    self.summary_writer.add_scalar('Loss/loss_replace', loss_replace.item(), self.n_updates)
-                    self.summary_writer.add_scalar('Loss/loss_keep', loss_keep.item(), self.n_updates)
+                elif self.args.pretrain_strategy == 'rm_md_pred':
+                    wandb.log({'train_loss': loss, 'sl_loss': sl_loss, 'fp_loss': fp_loss, 'contrastive_loss': contrastive_loss, 'lr': self.optimizer.state_dict()['param_groups'][0]['lr']})
                     
-                    if self.args.pretrain_strategy != 'rm_fp_pred':
-                        self.summary_writer.add_scalar('Loss/loss_clf', fp_loss.item(), self.n_updates)
-                    if self.args.pretrain_strategy != 'rm_md_pred':
-                        self.summary_writer.add_scalar('Loss/loss_reg', md_loss.item(), self.n_updates)
-                
-                    self.summary_writer.add_scalar('LR', torch.tensor(self.lr_scheduler.get_lr()[-1]).item(), self.n_updates)
+                elif self.args.pretrain_strategy == 'rm_both_pred':
+                    wandb.log({'train_loss': loss, 'sl_loss': sl_loss, 'contrastive_loss': contrastive_loss, 'lr': self.optimizer.state_dict()['param_groups'][0]['lr']})
                     
-                    self.summary_writer.add_scalar('F1_micro/all', f1_score(preds, labels, average='micro'), self.n_updates)
-                    self.summary_writer.add_scalar('F1_macro/all', f1_score(preds, labels, average='macro'), self.n_updates)
-                    self.summary_writer.add_scalar('F1_micro/mask', f1_score(preds[mask_replace_keep==1], labels[mask_replace_keep==1], average='micro'), self.n_updates)
-                    self.summary_writer.add_scalar('F1_macro/mask', f1_score(preds[mask_replace_keep==1], labels[mask_replace_keep==1], average='macro'), self.n_updates)
-                    self.summary_writer.add_scalar('F1_micro/replace', f1_score(preds[mask_replace_keep==2], labels[mask_replace_keep==2], average='micro'), self.n_updates)
-                    self.summary_writer.add_scalar('F1_macro/replace', f1_score(preds[mask_replace_keep==2], labels[mask_replace_keep==2], average='macro'), self.n_updates)
-                    self.summary_writer.add_scalar('F1_micro/keep', f1_score(preds[mask_replace_keep==3], labels[mask_replace_keep==3], average='micro'), self.n_updates)
-                    self.summary_writer.add_scalar('F1_macro/keep', f1_score(preds[mask_replace_keep==3], labels[mask_replace_keep==3], average='macro'), self.n_updates)
-                    self.summary_writer.add_scalar(f'Clf/{self.clf_evaluator.eval_metric}_all', np.mean(self.clf_evaluator.eval(fps, fp_predictions)), self.n_updates)
-                if self.n_updates % 1000 == 0:
-                    if self.local_rank == 0:
-                        print('%d steps finished!' % self.n_updates)               
-                if self.training_updates == self.args.n_steps:
-                    if self.local_rank == 0:
-                        print(f'now the update step is: {self.n_updates}')
-                        self.save_model(model)
-                    break
-
-            except Exception as e:
-                print(e)
-            else:
-                continue
+                elif self.args.pretrain_strategy == 'rm_none_pred':
+                    wandb.log({'train_loss': loss, 'sl_loss': sl_loss, 'fp_loss': fp_loss, 'md_loss': md_loss, 'contrastive_loss': contrastive_loss, 'lr': self.optimizer.state_dict()['param_groups'][0]['lr']})
+            
+            if self.n_updates % 1000 == 0:
+                if self.local_rank == 0:
+                    print('%d steps finished!' % self.n_updates)               
+            if self.training_updates == self.args.n_steps:
+                if self.local_rank == 0:
+                    print(f'now the update step is: {self.n_updates}')
+                    self.save_model(model)
+                break
 
     def fit(self, model, train_loader, train_episode):
         if self.local_rank == 0:

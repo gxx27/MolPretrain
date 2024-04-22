@@ -1,17 +1,19 @@
 import sys
 sys.path.append('..')
 
-from src.utils import set_random_seed
+import numpy as np
+import os
+import random
 import argparse
+import wandb
+
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.nn import MSELoss, BCEWithLogitsLoss, CrossEntropyLoss
-from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data.distributed import DistributedSampler
-import numpy as np
-import os
-import random
+
+from src.utils import set_random_seed
 from src.data.featurizer import Vocab, N_BOND_TYPES, N_ATOM_TYPES
 from src.data.pretrain_dataset import MoleculeDataset
 from src.data.collator import Collator_pretrain
@@ -33,6 +35,7 @@ def parse_args():
     parser.add_argument("--pretrain2_path", type=str, default=None)
     parser.add_argument("--save_path", type=str, default='../models')
     parser.add_argument("--n_steps", type=int, default=100000)
+    parser.add_argument("--total_steps", type=int, default=300000)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--config", type=str, default="KPGT-B/768")
     parser.add_argument("--n_threads", type=int, default=8)
@@ -42,6 +45,7 @@ def parse_args():
     parser.add_argument("--data_aug1_rate", type=float, default=0.2)
     parser.add_argument("--data_aug2", type=str, default=None, help='choose from drop_nodes, permute_edges, mask_nodes, subgraph')
     parser.add_argument("--data_aug2_rate", type=float, default=0.2)
+    parser.add_argument("--wandb_key", type=str, default=None)
     args = parser.parse_args()
     return args
 
@@ -59,16 +63,9 @@ if __name__ == '__main__':
     torch.cuda.set_device(local_rank)
     torch.distributed.init_process_group(backend='nccl')
     device = torch.device('cuda', local_rank)
-    # device = torch.device('cpu')
     set_random_seed(args.seed)
     print(local_rank)
     val_results, test_results, train_results = [], [], []
- 
-    # if local_rank == 0:
-    #     summary_writer = SummaryWriter(f"tensorboard/pretrain-mix-{args.config}", )
-    # else: 
-    #     summary_writer = None 
-    summary_writer = None
     
     vocab = Vocab(N_ATOM_TYPES, N_BOND_TYPES)        
     collator = Collator_pretrain(
@@ -100,17 +97,25 @@ if __name__ == '__main__':
     ).to(device)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     optimizer = Adam(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
-    lr_scheduler = PolynomialDecayLR(optimizer, warmup_updates=20000, tot_updates=400000,lr=config['lr'], end_lr=1e-9,power=1)
+    lr_scheduler = PolynomialDecayLR(optimizer, warmup_updates=20000, tot_updates=args.total_steps,lr=config['lr'], end_lr=1e-9,power=1)
     reg_loss_fn = MSELoss(reduction='none')
     clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
     sl_loss_fn = CrossEntropyLoss(reduction='none')
+    contrastive_loss_fn = CrossEntropyLoss().to(device)
     reg_metric, clf_metric = "r2", "rocauc_resp"
     reg_evaluator = Evaluator("mix", reg_metric, train_dataset.d_mds)
     clf_evaluator = Evaluator("mix", clf_metric, train_dataset.d_fps)
     result_tracker = Result_Tracker(reg_metric)
+    
+    if local_rank == 0:
+        os.environ["WANDB_PROJECT"] = "KPGT"
+        os.environ["WANDB_SILENT"] = "true"
+        wandb.login(key=args.wandb_key)
+        wandb.init()
+        wandb.watch(model)
 
-    trainer = Trainer(args, optimizer, lr_scheduler, reg_loss_fn, clf_loss_fn, sl_loss_fn, 
-                      reg_evaluator, clf_evaluator, result_tracker, summary_writer, device=device,local_rank=local_rank)
+    trainer = Trainer(args, optimizer, lr_scheduler, reg_loss_fn, clf_loss_fn, sl_loss_fn, contrastive_loss_fn,
+                      reg_evaluator, clf_evaluator, result_tracker, device=device,local_rank=local_rank)
     trainer.fit(model, train_loader, train_episode=1)
 
     del train_dataset # reduce memory cost
@@ -119,12 +124,9 @@ if __name__ == '__main__':
     if 'mix' not in args.pretrain1_path and not args.pretrain2_path == None:
         train_dataset = MoleculeDataset(root_path=args.pretrain2_path)
         train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=args.batch_size// args.n_devices, 
-                                  num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator
+                                  num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator, pin_memory=True
         )
 
         clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
             
         trainer.fit(model, train_loader, train_episode=2)
-
-    # if local_rank == 0:
-    #     summary_writer.close()
