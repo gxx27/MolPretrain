@@ -22,6 +22,7 @@ class Trainer():
         self.local_rank = local_rank
         self.n_updates = 0      
     
+        self.gradient_accumulate_steps = args.gradient_accumulate_steps
         self.training_updates = 0
         self.train_episode = 1 # mark training episode 1 for the first and 2 for the second
     
@@ -39,7 +40,7 @@ class Trainer():
 
     def info_nce_loss(self, features):
         T = 0.1
-        labels = torch.cat([torch.arange(features.shape[0]) for _ in range(2)], dim=0)
+        labels = torch.cat([torch.arange(features.shape[0] // 2) for _ in range(2)], dim=0)
         labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float() # broadcast
         labels = labels.to(self.device)
 
@@ -67,7 +68,7 @@ class Trainer():
     def train_epoch(self, model, train_loader, epoch_idx):
         model.train()
         for batch_idx, batched_data in enumerate(train_loader):
-            self.optimizer.zero_grad()
+            
             sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds, z = self._forward_epoch(model, batched_data)
             sl_loss = self.sl_loss_fn(sl_predictions, sl_labels).mean()
             fp_loss = self.clf_loss_fn(fp_predictions, fps).mean()
@@ -78,12 +79,17 @@ class Trainer():
 
             loss = (sl_loss + fp_loss + md_loss + contrastive_loss) / 4
             
+            if self.gradient_accumulate_steps > 1:
+                loss = loss / self.gradient_accumulate_steps
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
-            self.optimizer.step()
-            self.n_updates += 1
-            self.training_updates += 1
-            self.lr_scheduler.step()
+            
+            if (batch_idx + 1) % self.gradient_accumulate_steps == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
+                self.optimizer.step()
+                self.n_updates += 1
+                self.training_updates += 1
+                self.lr_scheduler.step()
+                self.optimizer.zero_grad()
             
             if self.local_rank == 0:
                 if self.args.pretrain_strategy == 'rm_fp_pred':
@@ -126,6 +132,7 @@ class Trainer():
             if self.local_rank == 0:
                 print(f'training updates:{self.training_updates}, n_updates:{self.n_updates}')
         
+        self.optimizer.zero_grad()
         for epoch in range(1, 1001):
             model.train()
             if self.ddp:
@@ -139,9 +146,9 @@ class Trainer():
             os.makedirs(self.args.save_path)
         
         if self.args.pretrain2_path == None:
-            save_path = os.path.join(self.args.save_path, f"one_stage_{self.args.pretrain1_path}_{self.n_updates}.pth")
+            save_path = os.path.join(self.args.save_path, f"one_stage{self.args.pretrain1_path.replace('/', '-')}_{self.n_updates}_{self.args.pretrain_strategy}.pth")
         else:
-            save_path = os.path.join(self.args.save_path, f"two_stage_{self.args.pretrain1_path}_{self.n_updates}.pth")
+            save_path = os.path.join(self.args.save_path, f"two_stage{self.args.pretrain1_path.replace('/', '-')}_{self.n_updates}_{self.args.pretrain_strategy}.pth")
         torch.save(model.state_dict(), save_path)
 
     

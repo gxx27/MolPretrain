@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument("--n_steps", type=int, default=100000)
     parser.add_argument("--total_steps", type=int, default=300000)
     parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--gradient_accumulate_steps", type=int, default=2)
     parser.add_argument("--config", type=str, default="KPGT-B/768")
     parser.add_argument("--n_threads", type=int, default=8)
     parser.add_argument("--n_devices", type=int, default=1)
@@ -107,7 +108,7 @@ if __name__ == '__main__':
     clf_evaluator = Evaluator("mix", clf_metric, train_dataset.d_fps)
     result_tracker = Result_Tracker(reg_metric)
     
-    if local_rank == 0:
+    if local_rank == 0 and args.wandb_key is not None:
         os.environ["WANDB_PROJECT"] = "KPGT"
         os.environ["WANDB_SILENT"] = "true"
         wandb.login(key=args.wandb_key)

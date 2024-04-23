@@ -295,11 +295,14 @@ class LiGhTPredictor(nn.Module):
         triplet_h[g.ndata['mask']==1] = self.mask_emb.weight
         # Model
         triplet_h = self.model(g, triplet_h)
+        g.ndata['ht'] = triplet_h
         # Readout
-        unbatched_graph = dgl.unbatch(g)
-        batched_graph = dgl.batch([subg for subg in unbatched_graph if subg.ndata['contrastive_mark'][0] != 0])
-        batched_graph.ndata['contrast'] = triplet_h[g.ndata['contrastive_mark']!=0]
-        readout = dgl.readout_nodes(batched_graph, 'contrast', op=self.readout_mode)
+        fp_vn = triplet_h[indicators==1]
+        md_vn = triplet_h[indicators==2]
+        g.remove_nodes(np.where(indicators.detach().cpu().numpy()>=1)[0])
+        readout = dgl.readout_nodes(g, 'ht', op=self.readout_mode)
+        g_feats = torch.cat([fp_vn, md_vn, readout],dim=-1)
+        print('shape:', g_feats.shape)
         # Predict
         return self.node_predictor(triplet_h[g.ndata['mask']>=1]), self.fp_predictor(triplet_h[indicators==1]), self.md_predictor(triplet_h[indicators==2]), self.contrastive_predictor(readout)
 
