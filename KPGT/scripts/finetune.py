@@ -105,7 +105,7 @@ def finetune(args):
     del model.md_predictor
     del model.fp_predictor
     del model.node_predictor
-    del model.subgraph_predictor
+    del model.contrastive_predictor
     print("model have {}M paramerters in total".format(sum(x.numel() for x in model.parameters())/1e6))
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     lr_scheduler = PolynomialDecayLR(optimizer, warmup_updates=args.n_epochs*len(train_dataset)//32//10, tot_updates=args.n_epochs*len(train_dataset)//32,lr=args.lr, end_lr=1e-9,power=1)

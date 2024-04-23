@@ -278,7 +278,7 @@ class LiGhTPredictor(nn.Module):
         )
         
         self.contrastive_predictor = nn.Sequential(
-            nn.Linear(d_g_feats, d_g_feats),
+            nn.Linear(3 * d_g_feats, d_g_feats),
             activation,
             nn.Linear(d_g_feats, d_g_feats)
         )
@@ -290,21 +290,22 @@ class LiGhTPredictor(nn.Module):
         # Input
         node_h = self.node_emb(g.ndata['begin_end'], indicators)          
         edge_h = self.edge_emb(g.ndata['edge'], indicators)
-        # triplet_h = self.triplet_emb(node_h, edge_h, disturbed_fp, disturbed_md, indicators, fp, md)
         triplet_h = self.triplet_emb(node_h, edge_h, fp, md, indicators)
         triplet_h[g.ndata['mask']==1] = self.mask_emb.weight
         # Model
         triplet_h = self.model(g, triplet_h)
         g.ndata['ht'] = triplet_h
-        # Readout
         fp_vn = triplet_h[indicators==1]
         md_vn = triplet_h[indicators==2]
-        g.remove_nodes(np.where(indicators.detach().cpu().numpy()>=1)[0])
+        sl_prediction = self.node_predictor(triplet_h[g.ndata['mask']>=1])
+        fp_prediction = self.fp_predictor(fp_vn)
+        md_prediction = self.md_predictor(md_vn)
+        # Readout
+        g.remove_nodes(torch.where(indicators>=1)[0])
         readout = dgl.readout_nodes(g, 'ht', op=self.readout_mode)
         g_feats = torch.cat([fp_vn, md_vn, readout],dim=-1)
-        print('shape:', g_feats.shape)
-        # Predict
-        return self.node_predictor(triplet_h[g.ndata['mask']>=1]), self.fp_predictor(triplet_h[indicators==1]), self.md_predictor(triplet_h[indicators==2]), self.contrastive_predictor(readout)
+        contrastive_prediction = self.contrastive_predictor(g_feats)
+        return sl_prediction, fp_prediction, md_prediction, contrastive_prediction
 
     def forward_tune(self, g, fp, md):
         indicators = g.ndata['vavn'] # 0 indicates normal atoms and nodes (triplets); -1 indicates virutal atoms; >=1 indicate virtual nodes 

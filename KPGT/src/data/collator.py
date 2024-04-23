@@ -246,22 +246,12 @@ class Collator_pretrain(object):
     def __call__(self, samples):
         smiles_list, fps, mds = map(list, zip(*samples))
         graphs = []
-        # contrastive_graph1 = []
-        # contrastive_graph2 = []
         for smiles in smiles_list:
             params = smiles_to_graph(smiles, self.vocab, max_length=self.max_length, n_virtual_nodes=self.n_virtual_nodes, add_self_loop=self.add_self_loop)
-            # graph0 = self.data_augment(augment=None, aug_ratio=None, params=params)
             graph1 = self.data_augment(augment=self.data_aug1, aug_ratio=self.data_aug1_rate, params=params)
             graph2 = self.data_augment(augment=self.data_aug2, aug_ratio=self.data_aug2_rate, params=params)
-            # graph0.ndata['contrastive_mark'] = torch.zeros(graph0.num_nodes()) # 0 denotes original graph
-            # graph1.ndata['contrastive_mark'] = torch.ones(graph1.num_nodes()) # 1 denotes data augmentation method 1
-            # graph2.ndata['contrastive_mark'] = torch.ones(graph2.num_nodes()) * 2 # 2 denotes data augmentation method 2
             graphs.append(graph1)
             graphs.append(graph2)
-            # contrastive_graph1.append(graph1)
-            # contrastive_graph2.append(graph2)
-        # graphs.extend(contrastive_graph1)
-        # graphs.extend(contrastive_graph2)
         batched_graph = dgl.batch(graphs)
         mds = torch.stack(mds, dim=0).reshape(len(smiles_list),-1)
         fps = torch.stack(fps, dim=0).reshape(len(smiles_list),-1)
@@ -271,12 +261,6 @@ class Collator_pretrain(object):
         sl_labels = self.bert_mask_nodes(batched_graph)
         disturbed_fps = self.disturb_fp(fps)
         disturbed_mds = self.disturb_md(mds)
-        
-        # similarly, the fps and mds should be added twice
-        # disturbed_mds = torch.cat([disturbed_mds, mds, mds], dim=0)
-        # disturbed_fps = torch.cat([disturbed_fps, fps, fps], dim=0)
-        # fps = torch.cat([fps, fps, fps], dim=0)
-        # mds = torch.cat([mds, mds, mds], dim=0)
 
         return smiles_list, batched_graph, fps, mds, sl_labels, disturbed_fps, disturbed_mds
 

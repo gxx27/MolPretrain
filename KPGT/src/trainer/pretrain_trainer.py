@@ -91,7 +91,7 @@ class Trainer():
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad()
             
-            if self.local_rank == 0:
+            if self.local_rank == 0 and self.args.wandb_key is not None:
                 if self.args.pretrain_strategy == 'rm_fp_pred':
                     wandb.log({'train_loss': loss, 'sl_loss': sl_loss, 'md_loss': md_loss, 'contrastive_loss': contrastive_loss, 'lr': self.optimizer.state_dict()['param_groups'][0]['lr']})
                 
